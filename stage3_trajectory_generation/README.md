@@ -30,3 +30,11 @@ Stage 4 then runs directly on the task folder:
 ```bash
 python stage4_robot_data_generation/run_stage4.py runs/<name>/stage3/stage4_task/stage4.json
 ```
+
+Inspect the generated trajectory:
+
+```bash
+cd /home/vesoma/DexAgent
+V=runs/g1_cup_on_coaster/stage3/verified/5bbc6db3f443449d84fc51c996892c1e
+python stage3_trajectory_generation/view_trajectory.py --scene $V/scene.xml --trajectory $V/trajectory.npz
+```
