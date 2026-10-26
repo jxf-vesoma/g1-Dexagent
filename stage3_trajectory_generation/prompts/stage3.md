@@ -31,6 +31,19 @@ the session as a backend stall, preserving the unverified candidate for recovery
    Build hand scenes from the current object state with `hand_scene_from_recon`.
    Where supplied, use human hand observations through the library's retargeting
    and grasp-seeding tools. Otherwise use task geometry and the observed contacts.
+   Follow the grasp style Stage 1 describes (a side grasp, a grasp from above):
+   pass `scene_semantic_json` to grasp generators that read it
+   (`generate_parallel_jaw_grasps`) and prefer candidates of that style; take
+   another style only when the observed one fails on the robot, and say why.
+   Make the reach look like the video's: `human_hand_track` (the video,
+   camera.json, a window from about 1.2 s before the grasp subgoal's start to
+   1.2 s after it) gives the hand's path on the bench, and
+   `video_guided_approach` turns a grasp pose into candidates on the side of
+   the object where the human hand settled, approached from where it came in
+   (pass `bench_scene` and the carry's `arm_waypoints`). Use its ranked
+   `pose_candidates` and `approach_m` in the grasp entry, re-run the stress
+   tests on the pose the executor used, and keep the video's side unless the
+   robot cannot hold it.
 4. Search and rank candidates, including their approach and complete intended
    manipulation path. Check arm reach, collisions, grasp stability and release,
    not just a single final wrist pose. `optimize_grasp_pose`, `arm_workspace_map`,
@@ -38,7 +51,10 @@ the session as a backend stall, preserving the unverified candidate for recovery
    For a held free object, grasp-search `arm_waypoints` can describe its target
    world body positions and orientations. Include the intended reorientation
    and destination when ranking grasps; a lift-only witness is insufficient for
-   a later rotation or placement. A failed local search is inconclusive, not
+   a later rotation or placement. On a robot with a torso, a grasp every arm
+   reaches at the pick-up may hold the hand at a destination near the body only
+   with the arm through the torso; turning the grasp about the object's vertical
+   axis changes which arm configurations stay clear. A failed local search is inconclusive, not
    proof that the task or fixed robot station is infeasible.
    Preserve the configured robot station placement and object initial states.
 5. Run appropriate grasp/contact stress tests through the harness tool interface.

@@ -122,6 +122,7 @@ environments:                          # Python interpreters for tools whose pac
 tool_environments:                     # tool name -> environment name above; tools not listed run in this interpreter
   detect_objects: sam3
   segment_with_text_prompts: sam3
+  human_hand_track: sam3
   track_objects: sam2
   extract_hand_meshes: hamer
   reconstruct_object_meshes: sam3d

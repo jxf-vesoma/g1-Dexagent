@@ -1,6 +1,6 @@
 {
  "counts": {
-  "skills": 153,
+  "skills": 158,
   "verifiers": 208
  },
  "categories": {
@@ -38,7 +38,9 @@
   "EgoDex thread_unthread_bead_necklace",
   "Meal Box (extra sample)",
   "EgoDex braid_unbraid",
-  "EgoDex charge_uncharge_device"
+  "EgoDex charge_uncharge_device",
+  "Pick up the cup and place it on the plate",
+  "cup_on_coaster"
  ],
  "tools": [
   {
@@ -8708,6 +8710,137 @@
    "url": "https://github.com/dexagent1/DexAgent/blob/main/tool_library/skills/construct_rope.py"
   },
   {
+   "name": "construct_round_plate",
+   "title": "Construct round plate or coaster",
+   "type": "skill",
+   "category": "Object Reconstruction",
+   "summary": "Builds a thin circular plate, coaster or puck as one rigid cylindrical body with its origin at the bottom centre.",
+   "description": "Creates a metric MJCF asset for a flat round rigid support. Radius, thickness, colour, mass, friction, placement and fixed/free status are parameters. The colliding top face is planar, so another rigid object can rest on it. The body frame is at the bottom centre, making table staging unambiguous.",
+   "inputs": [
+    {
+     "name": "out_dir",
+     "type": "path",
+     "description": "Folder receiving XML and params JSON."
+    },
+    {
+     "name": "name",
+     "type": "str",
+     "description": "Asset and body name.",
+     "optional": true
+    },
+    {
+     "name": "radius",
+     "type": "float",
+     "description": "Outer radius in metres.",
+     "optional": true
+    },
+    {
+     "name": "thickness",
+     "type": "float",
+     "description": "Thickness in metres.",
+     "optional": true
+    },
+    {
+     "name": "rgba",
+     "type": "list[4]",
+     "description": "Surface colour.",
+     "optional": true
+    },
+    {
+     "name": "mass",
+     "type": "float",
+     "description": "Mass in kg.",
+     "optional": true
+    },
+    {
+     "name": "friction",
+     "type": "list[3]",
+     "description": "MuJoCo friction triple.",
+     "optional": true
+    },
+    {
+     "name": "pos",
+     "type": "list[3]",
+     "description": "Bottom-centre position.",
+     "optional": true
+    },
+    {
+     "name": "yaw_deg",
+     "type": "float",
+     "description": "Yaw about world z.",
+     "optional": true
+    },
+    {
+     "name": "fixed",
+     "type": "bool",
+     "description": "Whether the body is fixed.",
+     "optional": true
+    },
+    {
+     "name": "include_floor",
+     "type": "bool",
+     "description": "Add a standalone floor.",
+     "optional": true
+    }
+   ],
+   "outputs": [
+    {
+     "name": "xml",
+     "type": "path",
+     "description": "MJCF path."
+    },
+    {
+     "name": "params_json",
+     "type": "path",
+     "description": "Built parameters."
+    },
+    {
+     "name": "body",
+     "type": "str",
+     "description": "Root body name."
+    },
+    {
+     "name": "joint",
+     "type": "str | None",
+     "description": "Free joint name unless fixed."
+    },
+    {
+     "name": "radius_m",
+     "type": "float",
+     "description": "Built radius."
+    },
+    {
+     "name": "thickness_m",
+     "type": "float",
+     "description": "Built thickness."
+    },
+    {
+     "name": "mass_kg",
+     "type": "float",
+     "description": "Built mass."
+    }
+   ],
+   "status": "tested",
+   "entrypoint": "construct_round_plate",
+   "requirements": [
+    "mujoco"
+   ],
+   "tags": [
+    "plate",
+    "coaster",
+    "disc",
+    "puck",
+    "rigid",
+    "support"
+   ],
+   "used_in": [
+    "Pick up the cup and place it on the plate"
+   ],
+   "cli": "python -m tool_library.skills.construct_round_plate OUT_DIR",
+   "file": "skills/construct_round_plate.py",
+   "url": "https://github.com/dexagent1/DexAgent/blob/main/tool_library/skills/construct_round_plate.py"
+  },
+  {
    "name": "construct_scissors",
    "title": "Construct scissors",
    "type": "skill",
@@ -12854,6 +12987,157 @@
    "url": "https://github.com/dexagent1/DexAgent/blob/main/tool_library/skills/generate_flat_pinches.py"
   },
   {
+   "name": "generate_parallel_jaw_grasps",
+   "title": "Generate parallel-jaw grasps for a rigid object",
+   "type": "skill",
+   "category": "Grasp & Poses",
+   "summary": "Enumerate antipodal grasps for a two-jaw gripper (the Dex1-1 of setup_g1_dex1): jaw axes through the object whose two surface points face each other inside the friction cone and fit the opening, the gripper placed so its pads close on them, screened against the table and verified by grasp_lift_test.",
+   "description": "For a hand whose fingers are two jaw slides (hand.hand_spec_for finds <side>_thumb_jaw and <side>_index_jaw), samples jaw axes (a Fibonacci half-sphere plus the world and object axes) through lines at several depths along each approach and heights above the centre of mass. Each line is ray cast against the grasped object from both sides: the two first hits are the jaw contacts, their surface normals must lie within cone_deg of the jaw axis (antipodal), and their distance must fit the jaw opening with clearance_m to spare on each side. Approaches are sampled around the jaw axis (perpendicular to it, never from below the table: approach z at most max_approach_up). The gripper is placed so the midpoint of its pad centres (the tip sites) sits on the midpoint of the contacts, the jaws closing along the hand's y. Static screen: the OPEN gripper at the grasp and on its retreat along -approach clears the object and the table, and the gripper with its jaws ON the contacts (finger_targets) does not enter the table (a closure the table blocks, such as a jaw under a box resting on it, is rejected). Survivors are ranked by the grasp style first (`style`, or the one the Stage 1 subgoal grasping this object describes when `scene_semantic_json` is given: 'side' puts grasps whose retreat rises less than 70 deg first, nearest a 45 deg tilt, which keeps the gripper body off the table; 'top' puts grasps retreating within 20 deg of vertical first, most vertical first; no style has no orientation preference), then most antipodal, then nearest the object's centre; with verify=True the top verify_top are driven through grasp_lift_test and the ones that lift come first. A part wider than the opening along every antipodal axis returns no grasp.",
+   "inputs": [
+    {
+     "name": "scene",
+     "type": "dict",
+     "description": "{hand_xml, side, objects, floor}; the last object is grasped; hand_xml a parallel-jaw hand (setup_g1_dex1/robot/dex1_<side>.xml)"
+    },
+    {
+     "name": "n_axes",
+     "type": "int",
+     "description": "jaw axes sampled on the half-sphere, besides the world and object axes (default 24)",
+     "optional": true
+    },
+    {
+     "name": "approach_step_deg",
+     "type": "float",
+     "description": "step of the approach direction around each jaw axis (default 30)",
+     "optional": true
+    },
+    {
+     "name": "depths_m",
+     "type": "list of float",
+     "description": "offsets of the contact line from the object's centre of mass along the approach, negative toward the gripper (default [0, -0.02, -0.04, 0.02])",
+     "optional": true
+    },
+    {
+     "name": "heights_m",
+     "type": "list of float",
+     "description": "offsets of the contact line from the centre of mass along world z (default [0, 0.02, 0.04]): a grasp high on a tall object leaves room under a tilted or horizontal gripper; lines that leave the object miss",
+     "optional": true
+    },
+    {
+     "name": "cone_deg",
+     "type": "float",
+     "description": "largest angle between a contact normal and the jaw axis (default 20; a friction coefficient of 0.36)",
+     "optional": true
+    },
+    {
+     "name": "clearance_m",
+     "type": "float",
+     "description": "opening to spare on each side of the part (default 0.004)",
+     "optional": true
+    },
+    {
+     "name": "max_approach_up",
+     "type": "float",
+     "description": "largest upward component of the approach direction (default 0.05: horizontal or from above)",
+     "optional": true
+    },
+    {
+     "name": "retreat_m",
+     "type": "float",
+     "description": "how far the open gripper must retreat clear along -approach (default 0.09)",
+     "optional": true
+    },
+    {
+     "name": "style",
+     "type": "str | None",
+     "description": "'side', 'top' or None: the grasp style to rank first (default None: read from scene_semantic_json when given, else no preference). Matching grasps come first; the others still follow",
+     "optional": true
+    },
+    {
+     "name": "scene_semantic_json",
+     "type": "str | None",
+     "description": "Stage 1 scene_semantics.json: when `style` is None, the style is read from the action and acting-hand role of the subgoal that grasps this object (`subgoal`, or the first grasp_lift / grasp subgoal naming the scene's `target`): 'from above', 'top-down', 'from the top' give 'top'; 'side', 'around', 'wrap' give 'side'",
+     "optional": true
+    },
+    {
+     "name": "subgoal",
+     "type": "int | None",
+     "description": "the Stage 1 subgoal index to read the style from (default: found from the scene's target)",
+     "optional": true
+    },
+    {
+     "name": "verify",
+     "type": "bool",
+     "description": "run grasp_lift_test on the top verify_top candidates (default True)",
+     "optional": true
+    },
+    {
+     "name": "verify_top",
+     "type": "int",
+     "description": "how many candidates to verify (default 4)",
+     "optional": true
+    },
+    {
+     "name": "max_candidates",
+     "type": "int",
+     "description": "how many ranked candidates to return (default 20)",
+     "optional": true
+    },
+    {
+     "name": "out_json",
+     "type": "str | None",
+     "description": "write the result here as JSON (its `grasps` entries are poses video_guided_approach, optimize_grasp_pose and the executor take)",
+     "optional": true
+    }
+   ],
+   "outputs": [
+    {
+     "name": "grasps",
+     "type": "list of pose dicts",
+     "description": "ranked: {side, pos, euler, finger_targets (jaws on the contacts), finger_targets_open, grip_fingers, family 'parallel_jaw', jaw_axis, approach (the retreat direction, outward from the object, as hand.approach_axis reads it), contacts, width_m, antipodal_deg, depth_m, height_m, elevation_deg (how far the retreat rises above horizontal), style ('side' or 'top'), lift (if verified)}; with verify only the ones that lift"
+    },
+    {
+     "name": "n_candidates / n_feasible / n_verified / n_lift",
+     "type": "int",
+     "description": "lines tried, statically feasible grasps, verified, lifted"
+    },
+    {
+     "name": "rejected",
+     "type": "dict",
+     "description": "count per reason: miss, too_wide, not_antipodal, collision, retreat, table_blocks_closure"
+    },
+    {
+     "name": "opening_m",
+     "type": "float",
+     "description": "the gripper's full opening between the pads"
+    },
+    {
+     "name": "style / style_source / n_side / n_top",
+     "type": "str | int",
+     "description": "the style ranked first (None when none), where it came from ('argument', 'scene_semantic_json subgoal <i>: <text>', or None), and how many feasible grasps are of each style"
+    }
+   ],
+   "status": "tested",
+   "entrypoint": "generate_parallel_jaw_grasps",
+   "requirements": [
+    "mujoco>=3.1",
+    "numpy",
+    "scipy"
+   ],
+   "simulators": [
+    "MuJoCo"
+   ],
+   "tags": [
+    "grasp",
+    "candidate-generation",
+    "parallel-jaw",
+    "antipodal"
+   ],
+   "used_in": [],
+   "file": "skills/generate_parallel_jaw_grasps.py",
+   "url": "https://github.com/dexagent1/DexAgent/blob/main/tool_library/skills/generate_parallel_jaw_grasps.py"
+  },
+  {
    "name": "generate_rigid_grasps",
    "title": "Generate grasp candidates for a rigid object",
    "type": "skill",
@@ -13362,13 +13646,13 @@
     {
      "name": "hand_xml",
      "type": "str | None",
-     "description": "Hand MJCF; default <setup>/robot/sharpa_<side>.xml.",
+     "description": "Hand MJCF; default the setup's stations.<side>.hand_xml (setup.yaml), else <setup>/robot/sharpa_<side>.xml.",
      "optional": true
     },
     {
      "name": "setup_dir",
      "type": "str | None",
-     "description": "Setup folder (default the repository's setup/).",
+     "description": "Setup folder (default the one the bench scene names in its custom text dexagent_setup, else the repository's setup/).",
      "optional": true
     },
     {
@@ -14076,6 +14360,109 @@
    "entrypoint": "human_grasp_seeds",
    "file": "skills/human_grasp_seeds.py",
    "url": "https://github.com/dexagent1/DexAgent/blob/main/tool_library/skills/human_grasp_seeds.py"
+  },
+  {
+   "name": "human_hand_track",
+   "title": "Human hand track from video",
+   "type": "skill",
+   "category": "Perception & Grounding",
+   "summary": "Segments the demonstrator's hand (SAM 3) in a time window of the video and back-projects each frame's hand centroid and leading point through the registered camera onto a horizontal plane: the hand's path on the bench in metres, when it enters the view and when it settles at the object.",
+   "description": "Decodes the video frames of `time_window_s` (every `stride`-th), segments `prompt` with SAM 3, keeps the hand's connected component (the largest one, or with two large ones the one on `side`'s half of the image), and back-projects its pixel centroid (plane `plane_z_m`) and its leading point (the mask pixel farthest from where the arm crosses the image border, plane `tip_z_m`) through camera.json. A monocular track has no depth of its own: the planes are assumptions (the palm about at the grasp height, the fingertips at the object's upper side), so the path's direction and timing are reliable, its height is not. `entry_s` is the first frame with a hand, `settle_s` the first frame after which the centroid moves less than `settle_speed_m_s`. video_guided_approach turns the track into grasp and approach candidates.",
+   "inputs": [
+    {
+     "name": "video",
+     "type": "path",
+     "description": "The human video (Stage 1 input)."
+    },
+    {
+     "name": "camera_json",
+     "type": "path",
+     "description": "Stage 2 camera.json (rig frame)."
+    },
+    {
+     "name": "time_window_s",
+     "type": "list[2]",
+     "description": "[t0, t1] seconds; for a grasp, from about 1.2 s before the Stage 1 subgoal's start to 1.2 s after it."
+    },
+    {
+     "name": "out_dir",
+     "type": "path",
+     "description": "Receives frames/, masks/ and track.json."
+    },
+    {
+     "name": "side",
+     "type": "str",
+     "description": "'right' or 'left': the hand to keep when two are visible. Default 'right'.",
+     "optional": true
+    },
+    {
+     "name": "prompt",
+     "type": "str",
+     "description": "SAM 3 text prompt. Default 'human hand'.",
+     "optional": true
+    },
+    {
+     "name": "stride",
+     "type": "int",
+     "description": "Use every stride-th frame. Default 2.",
+     "optional": true
+    },
+    {
+     "name": "plane_z_m, tip_z_m",
+     "type": "float",
+     "description": "Heights of the planes the centroid and the leading point are back-projected onto. Defaults 0.10, 0.08.",
+     "optional": true
+    },
+    {
+     "name": "settle_speed_m_s",
+     "type": "float",
+     "description": "Centroid speed below which the hand has settled. Default 0.06.",
+     "optional": true
+    },
+    {
+     "name": "min_area_px",
+     "type": "int",
+     "description": "Smaller masks count as no hand. Default 400.",
+     "optional": true
+    }
+   ],
+   "outputs": [
+    {
+     "name": "track",
+     "type": "list",
+     "description": "[{t, centroid [x,y,z], tip [x,y,z], centroid_px, tip_px, area_px}] for frames with a hand."
+    },
+    {
+     "name": "entry_s, settle_s",
+     "type": "float | None",
+     "description": "When the hand enters the view and when it settles."
+    },
+    {
+     "name": "track_json",
+     "type": "path",
+     "description": "The result as JSON (video_guided_approach's input)."
+    }
+   ],
+   "status": "tested",
+   "entrypoint": "human_hand_track",
+   "requirements": [
+    "sam3",
+    "torch",
+    "opencv-python"
+   ],
+   "tags": [
+    "hand",
+    "video",
+    "track",
+    "approach",
+    "SAM 3"
+   ],
+   "used_in": [
+    "Pick up the cup and place it on the plate"
+   ],
+   "cli": "python -m tool_library.skills.human_hand_track VIDEO CAMERA_JSON T0 T1 OUT_DIR",
+   "file": "skills/human_hand_track.py",
+   "url": "https://github.com/dexagent1/DexAgent/blob/main/tool_library/skills/human_hand_track.py"
   },
   {
    "name": "identify_moving_joint",
@@ -15957,6 +16344,98 @@
    "entrypoint": "package_stage3_episode",
    "file": "skills/package_stage3_episode.py",
    "url": "https://github.com/dexagent1/DexAgent/blob/main/tool_library/skills/package_stage3_episode.py"
+  },
+  {
+   "name": "parallel_jaw_grasp_candidates_raygroups",
+   "title": "Generate parallel-jaw grasp candidates with collision-group ray casting",
+   "type": "skill",
+   "category": "Grasp & Poses",
+   "summary": "Find antipodal two-jaw poses on rigid bodies using ray masks derived from the target collision geoms' MuJoCo groups.",
+   "description": "Samples jaw axes and in-plane approach directions, ray-casts only target collision geometry groups, validates antipodal normals and jaw width, positions the Dex1 pad midpoint at contact, and screens open approach, retreat, and closure against the scene. This handles assets whose collision geoms use non-default geom groups.",
+   "inputs": [
+    {
+     "name": "scene",
+     "type": "dict",
+     "description": "Hand scene {hand_xml,side,objects,floor}; last object is grasped."
+    },
+    {
+     "name": "n_axes",
+     "type": "int",
+     "description": "Fibonacci jaw axes.",
+     "optional": true
+    },
+    {
+     "name": "approach_step_deg",
+     "type": "float",
+     "description": "Approach direction sampling step.",
+     "optional": true
+    },
+    {
+     "name": "depths_m",
+     "type": "list",
+     "description": "Offsets along approach from target COM.",
+     "optional": true
+    },
+    {
+     "name": "cone_deg",
+     "type": "float",
+     "description": "Max antipodal normal angle.",
+     "optional": true
+    },
+    {
+     "name": "clearance_m",
+     "type": "float",
+     "description": "Jaw width spare on each side.",
+     "optional": true
+    },
+    {
+     "name": "retreat_m",
+     "type": "float",
+     "description": "Open hand retreat distance.",
+     "optional": true
+    },
+    {
+     "name": "max_candidates",
+     "type": "int",
+     "description": "Maximum candidate poses.",
+     "optional": true
+    }
+   ],
+   "outputs": [
+    {
+     "name": "grasps",
+     "type": "list",
+     "description": "Ranked poses with jaw axis, contacts and width."
+    },
+    {
+     "name": "n_feasible",
+     "type": "int",
+     "description": "Static feasible candidates."
+    },
+    {
+     "name": "rejected",
+     "type": "dict",
+     "description": "Counts by rejection reason."
+    }
+   ],
+   "status": "tested",
+   "entrypoint": "parallel_jaw_grasp_candidates_raygroups",
+   "requirements": [
+    "mujoco>=3.1",
+    "numpy",
+    "scipy"
+   ],
+   "tags": [
+    "parallel-jaw",
+    "grasp",
+    "raycast",
+    "collision-groups"
+   ],
+   "used_in": [
+    "cup_on_coaster"
+   ],
+   "file": "skills/parallel_jaw_grasp_candidates_raygroups.py",
+   "url": "https://github.com/dexagent1/DexAgent/blob/main/tool_library/skills/parallel_jaw_grasp_candidates_raygroups.py"
   },
   {
    "name": "physics_informed_retargeting",
@@ -20501,6 +20980,115 @@
    "url": "https://github.com/dexagent1/DexAgent/blob/main/tool_library/skills/track_objects.py"
   },
   {
+   "name": "video_guided_approach",
+   "title": "Video-guided grasp approach",
+   "type": "skill",
+   "category": "Grasp & Poses",
+   "summary": "From a human_hand_track and a grasp pose on an upright object: the pose turned about the object's vertical axis so the hand sits on the side of the object where the human hand settled, with a pre-grasp out along the direction the hand came in from and a final straight run along the gripper's own axis; ranked by closeness to the video and, with bench_scene, screened for the arm (torso included).",
+   "description": "The human hand's settled centroid gives the side of the object it holds (its azimuth about the object's vertical axis); the pose (any grasp tool's format, with its recorded `approach`) is turned about that axis so its hand sits at that azimuth, then by `yaw_step_deg` steps on both sides up to `yaw_span_deg` (the arm may not hold the exact one). Each candidate gets `approach` = the unit blend of the video's incoming direction (entry -> settle, tilted up by `incoming_rise`) and the gripper's own approach axis, `approach_waypoints` = [final_m along the gripper axis] and the plan entry's `approach_m`: the executor reaches the pre-grasp approach_m out along the blend, moves in to final_m in front of the grasp and slides straight on, so the visible approach comes from the side the human hand came from while the jaws still enter along their own axis. A turn changes the contact on a non-round object: only round, upright parts (a cup, a bottle) keep their grasp under it; re-run the grasp stress tests on the chosen candidate. With bench_scene each candidate is screened by armhand.screen_poses (exact IK, the arm probe and the torso) at the pre-grasp, the grasp and `arm_waypoints`; for a carry to a destination near the robot's body, pass the destination there, and consider a turn of the carried object about the vertical (the plan's carry `turn`), which a round object does not show.",
+   "inputs": [
+    {
+     "name": "track_json",
+     "type": "path | dict",
+     "description": "human_hand_track's track.json."
+    },
+    {
+     "name": "pose",
+     "type": "dict | path",
+     "description": "The grasp pose to shape (pos, euler, approach, finger targets), a list of poses (the first is used) or a grasp tool's out_json (its first `grasps` entry), e.g. from optimize_grasp_pose or generate_parallel_jaw_grasps."
+    },
+    {
+     "name": "object_pos",
+     "type": "list[3]",
+     "description": "The object's vertical axis: its centre on the table (world)."
+    },
+    {
+     "name": "side",
+     "type": "str",
+     "description": "Station of the grasp. Default 'right'.",
+     "optional": true
+    },
+    {
+     "name": "approach_m, final_m",
+     "type": "float",
+     "description": "Pre-grasp distance along the blended direction and the straight final run along the gripper axis. Defaults 0.12, 0.05.",
+     "optional": true
+    },
+    {
+     "name": "incoming_rise",
+     "type": "float",
+     "description": "Upward component added to the (horizontal) incoming direction before normalising. Default 0.25.",
+     "optional": true
+    },
+    {
+     "name": "yaw_span_deg, yaw_step_deg",
+     "type": "float",
+     "description": "Candidates around the video's azimuth. Defaults 30, 5.",
+     "optional": true
+    },
+    {
+     "name": "bench_scene",
+     "type": "path | None",
+     "description": "Stage 2 scene.xml: screen every candidate for the station's arm.",
+     "optional": true
+    },
+    {
+     "name": "arm_waypoints",
+     "type": "list | None",
+     "description": "As optimize_grasp_pose's (held-object targets through the carry and the destination).",
+     "optional": true
+    },
+    {
+     "name": "out_json",
+     "type": "path | None",
+     "description": "Write the result here.",
+     "optional": true
+    }
+   ],
+   "outputs": [
+    {
+     "name": "video",
+     "type": "dict",
+     "description": "incoming direction, settled palm azimuth about the object (deg), entry_s, settle_s, reach_s (entry to settle)."
+    },
+    {
+     "name": "candidates",
+     "type": "list",
+     "description": "[{yaw_deg (turn applied to the input pose), video_offset_deg, pose, screen}] ranked: screened ok first, then by |video_offset_deg|."
+    },
+    {
+     "name": "pose_candidates",
+     "type": "list",
+     "description": "The ranked poses, for execute_subgoal_plan's pose_candidates (the grasp entry also needs approach_m)."
+    },
+    {
+     "name": "approach_m",
+     "type": "float",
+     "description": "Put this in the grasp subgoal's plan entry."
+    }
+   ],
+   "status": "tested",
+   "entrypoint": "video_guided_approach",
+   "requirements": [
+    "mujoco",
+    "numpy",
+    "scipy"
+   ],
+   "tags": [
+    "grasp",
+    "approach",
+    "video",
+    "human",
+    "reach"
+   ],
+   "used_in": [
+    "Pick up the cup and place it on the plate"
+   ],
+   "cli": "python -m tool_library.skills.video_guided_approach TRACK_JSON POSE_JSON X Y Z",
+   "file": "skills/video_guided_approach.py",
+   "url": "https://github.com/dexagent1/DexAgent/blob/main/tool_library/skills/video_guided_approach.py"
+  },
+  {
    "name": "write_stage4_config",
    "title": "Write Stage 4 config",
    "type": "skill",
@@ -21236,7 +21824,7 @@
     {
      "name": "setup",
      "type": "str | None",
-     "description": "Trusted setup directory providing the calibrated mount.",
+     "description": "Trusted setup directory providing the calibrated mount (default the repository setup the scene names in its custom text dexagent_setup, else setup/).",
      "optional": true
     }
    ],

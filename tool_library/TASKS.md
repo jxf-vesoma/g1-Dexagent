@@ -95,3 +95,15 @@ Tasks outside the paper that a tool's `used_in` names (an extra sample, a video 
 **Skills (2)**: `construct_plug_cable`, `trace_rope_waypoints`
 
 **Verifiers (0)**: 
+
+## Pick up the cup and place it on the plate
+
+**Skills (3)**: `construct_round_plate`, `human_hand_track`, `video_guided_approach`
+
+**Verifiers (0)**: 
+
+## cup_on_coaster
+
+**Skills (1)**: `parallel_jaw_grasp_candidates_raygroups`
+
+**Verifiers (0)**: 
