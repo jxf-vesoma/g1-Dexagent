@@ -1,0 +1,9 @@
+<mujoco model="test_cup">
+  <!-- The setup's grasp check: a 70 mm cup, 100 mm tall, 0.2 kg (fits in the Dex1-1's 89 mm opening). -->
+  <worldbody>
+    <body name="cup" pos="0 0 0.05">
+      <freejoint/>
+      <geom name="cup_body" type="cylinder" size="0.035 0.05" mass="0.2" rgba="0.85 0.85 0.8 1"/>
+    </body>
+  </worldbody>
+</mujoco>
