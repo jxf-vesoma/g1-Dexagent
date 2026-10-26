@@ -7,3 +7,4 @@ setuptools<81         # SAM 3 imports pkg_resources, which setuptools 81 removed
 pycocotools           # imported by SAM 3 but not declared by it
 scipy                 # the physics replay uses the DexAgent tool library's executor and outcome checks
 trimesh               # the physics replay's visible-object collision audit (object_visual_penetration_audit) builds mesh solids
+pyarrow<20            # VOID pins numpy 1.26; newer pyarrow (pulled in by datasets) needs numpy 2 and breaks VOID's transformers import

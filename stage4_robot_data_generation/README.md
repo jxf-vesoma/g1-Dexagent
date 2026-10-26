@@ -59,6 +59,37 @@ hf download facebook/sam3.1 sam3.1_multiplex.pt config.json
 
 The weights go to the Hugging Face cache (`$HF_HOME`, default `~/.cache/huggingface`). Set `HF_HOME` if you want them somewhere else. If VOID is cloned elsewhere, point `VOID_DIR` at it.
 
+### Blackwell GPUs (RTX 50 series, RTX PRO 6000 Blackwell, B200)
+
+VOID's requirements install PyTorch 2.7.1 built for CUDA 12.6, which has no kernels for Blackwell GPUs (compute capability 10.0 or 12.0). The `plate` step then fails with
+
+```
+RuntimeError: CUDA error: no kernel image is available for execution on the device
+```
+
+After `setup.sh`, replace PyTorch and torchvision with the CUDA 12.8 builds of the same versions:
+
+```bash
+pip install --force-reinstall --no-deps torch==2.7.1 torchvision==0.22.1 --index-url https://download.pytorch.org/whl/cu128
+pip install torch==2.7.1 torchvision==0.22.1 --index-url https://download.pytorch.org/whl/cu128
+```
+
+The first command swaps the two packages; the second installs the CUDA 12.8 libraries they need. Check with
+
+```bash
+python -c "import torch; print(torch.__version__, torch.cuda.get_device_capability(), torch.cuda.get_arch_list())"
+```
+
+which should print `2.7.1+cu128` and list your GPU's architecture (e.g. `sm_120`). It needs an NVIDIA driver that supports CUDA 12.8 (570 or newer). Re-run the two commands whenever `setup.sh` reinstalls VOID's requirements.
+
+### `pyarrow requires NumPy 2.0 or newer`
+
+VOID pins `numpy==1.26.4`, but `datasets` can pull in a `pyarrow` built for NumPy 2. VOID then fails while importing `transformers` (`plate` step, `outputs/plate/void.log` ends with `ImportError: pyarrow requires NumPy 2.0 or newer, found 1.26.4`). `requirements.txt` pins `pyarrow<20`; in an environment installed before that pin, run
+
+```bash
+pip install "pyarrow==19.0.1"
+```
+
 ## Inputs
 
 Stage 3 writes this folder for you (`runs/<name>/stage3/stage4_task/`). To prepare one by hand, put everything for one task in one folder, with a config file next to the data:
