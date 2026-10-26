@@ -8,6 +8,9 @@ agent:                                 # the language model that runs the agent 
   model: claude-opus-5-5               # model name, e.g. claude-opus-5-5, claude-sonnet-5-5, claude-fable-5-1
   api_key: ""                          # your API key; empty = read ANTHROPIC_API_KEY (or OPENAI_API_KEY) from the environment
   base_url: null                       # only for a self-hosted or OpenAI-compatible endpoint
+  openai_api: null                     # openai only: responses | chat; null = responses for api.openai.com (reasoning models
+                                       # such as gpt-5.6 reject tools on chat), chat when base_url is set
+  reasoning_effort: null               # openai responses only: low | medium | high; null = the model's default
   budget_usd: null                     # REQUIRED for anthropic / openai: the run's spending cap in USD, across all its stages
                                        # (runs/<name>/budget.json; a stage stops when it is spent, the agent is told at 90%).
                                        # The external transport (a coding agent forked as a subagent) is capped by max_rounds

@@ -68,16 +68,94 @@ class AnthropicLLM:
 
 
 class OpenAILLM:
-    """Chat Completions with function calling. Images in tool results travel in a following
-    user message, because the tool role carries text only."""
+    """OpenAI function calling, through the Responses API (api='responses') or Chat Completions (api='chat'). OpenAI's
+    reasoning models (gpt-5.6) take function tools with reasoning only on the Responses API; OpenAI-compatible servers
+    (base_url) mostly speak Chat Completions only. Images in tool results travel in a following user message, because
+    a tool result carries text only."""
     priced = True                                   # its calls are charged to the run's budget
+    RESPONSES_MIN_OUTPUT = 32000                    # reasoning tokens count against the output limit
 
-    def __init__(self, model: str, api_key: str | None = None, base_url: str | None = None, max_tokens: int = 8000):
+    def __init__(self, model: str, api_key: str | None = None, base_url: str | None = None, max_tokens: int = 8000,
+                 api: str | None = None, reasoning_effort: str | None = None):
         import openai
         self.client = openai.OpenAI(api_key=api_key or os.environ.get("OPENAI_API_KEY"), base_url=base_url)
         self.model, self.max_tokens = model, max_tokens
+        self.api = (api or ("chat" if base_url else "responses")).lower()
+        if self.api not in ("responses", "chat"):
+            raise ValueError(f"agent.openai_api must be 'responses' or 'chat', not {api!r}")
+        self.reasoning_effort = reasoning_effort
 
     def complete(self, system: str, messages: list[dict], tools: list[dict]) -> list[dict]:
+        if self.api == "responses":
+            return self._complete_responses(system, messages, tools)
+        return self._complete_chat(system, messages, tools)
+
+    def _complete_responses(self, system: str, messages: list[dict], tools: list[dict]) -> list[dict]:
+        oa_tools = [{"type": "function", "name": t["name"], "description": t["description"], "parameters": t["input_schema"],
+                     "strict": False} for t in tools]   # strict schemas would need every property required
+        items = []
+        for m in messages:
+            items.extend(self._items(m))
+        kw = {}
+        if self.reasoning_effort:
+            kw["reasoning"] = {"effort": self.reasoning_effort}
+        # stateless: nothing stored at OpenAI; the encrypted reasoning comes back and is replayed with the next turn
+        resp = self.client.responses.create(model=self.model, instructions=system, input=items, tools=oa_tools,
+                                            max_output_tokens=max(self.max_tokens, self.RESPONSES_MIN_OUTPUT),
+                                            store=False, include=["reasoning.encrypted_content"], **kw)
+        u = getattr(resp, "usage", None)            # what this call cost, for the run's budget (agent/budget.py)
+        self.last_usage = {"input_tokens": int(getattr(u, "input_tokens", 0) or 0),
+                           "output_tokens": int(getattr(u, "output_tokens", 0) or 0)} if u is not None else None
+        out = []
+        for it in resp.output or []:
+            if it.type == "reasoning":
+                out.append({"type": "reasoning", "item": it.model_dump(exclude_none=True)})
+            elif it.type == "message":
+                text = "".join(getattr(c, "text", "") or "" for c in it.content or [] if c.type == "output_text")
+                if text:
+                    out.append({"type": "text", "text": text})
+            elif it.type == "function_call":
+                try:
+                    args = json.loads(it.arguments or "{}")
+                except json.JSONDecodeError:
+                    args = {"_raw": it.arguments}
+                out.append({"type": "tool_use", "id": it.call_id, "name": it.name, "input": args})
+        if not out and getattr(resp, "status", None) == "incomplete":
+            why = getattr(getattr(resp, "incomplete_details", None), "reason", None)
+            raise RuntimeError(f"the model's response was cut off ({why}) before any text or tool call")
+        return out
+
+    @staticmethod
+    def _items(m: dict) -> list[dict]:
+        if m["role"] == "assistant":
+            out = []
+            for c in m["content"]:
+                if c["type"] == "reasoning":
+                    out.append(c["item"])
+                elif c["type"] == "text" and c["text"]:
+                    out.append({"role": "assistant", "content": c["text"]})
+                elif c["type"] == "tool_use":
+                    out.append({"type": "function_call", "call_id": c["id"], "name": c["name"], "arguments": json.dumps(c["input"])})
+            return out
+        out, images, texts = [], [], []
+        for c in m["content"]:
+            if c["type"] == "tool_result":
+                text = "\n".join(x["text"] for x in c["content"] if x["type"] == "text")
+                imgs = [x for x in c["content"] if x["type"] == "image"]
+                if imgs:
+                    text += f"\n[{len(imgs)} image(s) follow in the next message]"
+                    images.extend(imgs)
+                out.append({"type": "function_call_output", "call_id": c["tool_use_id"], "output": text or "(no output)"})
+            elif c["type"] == "image":
+                images.append(c)
+            else:
+                texts.append({"type": "input_text", "text": c["text"]})
+        content = texts + [{"type": "input_image", "image_url": f"data:{x['mime']};base64,{x['data']}"} for x in images]
+        if content:
+            out.append({"role": "user", "content": content})
+        return out
+
+    def _complete_chat(self, system: str, messages: list[dict], tools: list[dict]) -> list[dict]:
         oa_tools = [{"type": "function", "function": {"name": t["name"], "description": t["description"], "parameters": t["input_schema"]}} for t in tools]
         msgs = [{"role": "system", "content": system}]
         for m in messages:
@@ -178,5 +256,5 @@ def make_llm(cfg: dict):
     if provider == "anthropic":
         return AnthropicLLM(**kw)
     if provider == "openai":
-        return OpenAILLM(**kw)
+        return OpenAILLM(**kw, api=a.get("openai_api") or None, reasoning_effort=a.get("reasoning_effort") or None)
     raise ValueError(f"unknown model provider: {provider}")

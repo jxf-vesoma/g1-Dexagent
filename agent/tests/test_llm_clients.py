@@ -44,6 +44,21 @@ def _check_request(kind: str, body: dict, turn: int):
                 if c.get("type") == "tool_result":
                     SEEN["tool_results"] += 1
                     SEEN["images"] += sum(1 for x in c.get("content", []) if x.get("type") == "image" and x["source"]["data"])
+    elif kind == "responses":
+        if "DexAgent" not in (body.get("instructions") or ""):
+            SEEN["errors"].append("responses: system prompt missing from instructions")
+        if any(t.get("type") != "function" or "parameters" not in t or "name" not in t for t in tools):
+            SEEN["errors"].append("responses: a tool is not a flat function with parameters")
+        if not body.get("store") is False or "reasoning.encrypted_content" not in (body.get("include") or []):
+            SEEN["errors"].append("responses: not stateless with encrypted reasoning")
+        items = body.get("input") or []
+        if sum(1 for it in items if it.get("type") == "reasoning" and it.get("encrypted_content") == "enc") != turn:
+            SEEN["errors"].append(f"responses request {turn}: earlier reasoning items were not replayed")
+        for it in items:
+            if it.get("type") == "function_call_output":
+                SEEN["tool_results"] += 1
+            if it.get("role") == "user" and isinstance(it.get("content"), list):
+                SEEN["images"] += sum(1 for x in it["content"] if x.get("type") == "input_image" and x["image_url"].startswith("data:image"))
     else:
         if body["messages"][0]["role"] != "system":
             SEEN["errors"].append("openai: first message is not the system prompt")
@@ -57,6 +72,8 @@ def _check_request(kind: str, body: dict, turn: int):
 
 
 def _turn_index(kind: str, body: dict) -> int:
+    if kind == "responses":
+        return sum(1 for it in body.get("input") or [] if it.get("type") == "function_call")
     return sum(1 for m in body["messages"] if m["role"] == "assistant")
 
 
@@ -66,7 +83,8 @@ class Stub(BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-        kind = "anthropic" if self.path.endswith("/messages") else "openai"
+        kind = ("anthropic" if self.path.endswith("/messages") else
+                "responses" if self.path.endswith("/responses") else "openai")
         turn = _turn_index(kind, body)
         SEEN["requests"] += 1
         _check_request(kind, body, turn)
@@ -75,6 +93,16 @@ class Stub(BaseHTTPRequestHandler):
             out = {"id": f"msg_{turn}", "type": "message", "role": "assistant", "model": body["model"], "stop_reason": "tool_use",
                    "stop_sequence": None, "usage": {"input_tokens": 1, "output_tokens": 1},
                    "content": [{"type": "text", "text": f"turn {turn}"}, {"type": "tool_use", "id": f"toolu_{turn}", "name": name, "input": args}]}
+        elif kind == "responses":
+            out = {"id": f"resp_{turn}", "object": "response", "created_at": 0, "model": body["model"], "status": "completed",
+                   "parallel_tool_calls": True, "tool_choice": "auto", "tools": [],
+                   "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2,
+                             "input_tokens_details": {"cached_tokens": 0}, "output_tokens_details": {"reasoning_tokens": 0}},
+                   "output": [{"type": "reasoning", "id": f"rs_{turn}", "summary": [], "encrypted_content": "enc"},
+                              {"type": "message", "id": f"msg_{turn}", "role": "assistant", "status": "completed",
+                               "content": [{"type": "output_text", "text": f"turn {turn}", "annotations": []}]},
+                              {"type": "function_call", "id": f"fc_{turn}", "call_id": f"call_{turn}", "name": name,
+                               "arguments": json.dumps(args), "status": "completed"}]}
         else:
             out = {"id": f"c{turn}", "object": "chat.completion", "created": 0, "model": body["model"],
                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
@@ -88,35 +116,37 @@ class Stub(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
 
-def run_case(provider: str, port: int, tmp: Path) -> list[str]:
+def run_case(case: str, port: int, tmp: Path) -> list[str]:
     import yaml
     for k in ("requests", "tool_results", "images"):
         SEEN[k] = 0
     SEEN["errors"] = []
+    provider = "anthropic" if case == "anthropic" else "openai"
     base = f"http://127.0.0.1:{port}" + ("/v1" if provider == "openai" else "")
     # an API model run needs a spending cap and a price for its model; $1 at $1 / Mtok is far above the stub's tokens
     cfg = {"agent": {"provider": provider, "model": "stub-model", "api_key": "stub-key", "base_url": base,
-                     "budget_usd": 1, "price_usd_per_mtok": {"input": 1, "output": 1}},
-           "run": {"name": f"stub_{provider}", "output_dir": str(tmp / "runs")},
+                     "budget_usd": 1, "price_usd_per_mtok": {"input": 1, "output": 1},
+                     **({"openai_api": "responses"} if case == "openai-responses" else {})},
+           "run": {"name": f"stub_{case}", "output_dir": str(tmp / "runs")},
            "examples": {"reuse": False}, "inputs": {"video": str(VIDEO), "task": "Close the red gift box"}}
-    cfg_path = tmp / f"{provider}.yaml"
+    cfg_path = tmp / f"{case}.yaml"
     cfg_path.write_text(yaml.safe_dump(cfg))
     sys.path.insert(0, str(REPO / "stage1_semantic_understanding"))
     import run_stage1
     rc = run_stage1.main([str(cfg_path), "--max-rounds", "4"])
-    trace = [json.loads(l) for l in (tmp / "runs" / f"stub_{provider}" / "stage1" / "trace.jsonl").read_text().splitlines()]
+    trace = [json.loads(l) for l in (tmp / "runs" / f"stub_{case}" / "stage1" / "trace.jsonl").read_text().splitlines()]
     tools = [e["name"] for e in trace if e.get("event") == "tool"]
     fails = list(SEEN["errors"])
     if tools != ["probe_video", "make_contact_sheet", "look"]:
-        fails.append(f"{provider}: tool calls executed {tools}")
+        fails.append(f"{case}: tool calls executed {tools}")
     if SEEN["requests"] != 4:
-        fails.append(f"{provider}: {SEEN['requests']} requests, expected 4")
+        fails.append(f"{case}: {SEEN['requests']} requests, expected 4")
     if SEEN["images"] < 1:
-        fails.append(f"{provider}: the contact sheet image never reached the model")
+        fails.append(f"{case}: the contact sheet image never reached the model")
     if not any(e.get("event") == "verify" for e in trace):
-        fails.append(f"{provider}: finish did not run the verifiers")
+        fails.append(f"{case}: finish did not run the verifiers")
     if rc != 1:   # the stub writes no deliverable, so the verifiers must fail and the stage must end unfinished
-        fails.append(f"{provider}: return code {rc}, expected 1 (unfinished)")
+        fails.append(f"{case}: return code {rc}, expected 1 (unfinished)")
     return fails
 
 
@@ -128,13 +158,13 @@ def main():
     tmp = Path(tempfile.mkdtemp(prefix="dexagent_llm_", dir=os.environ.get("TMPDIR")))
     failed = False
     try:
-        for provider in ("anthropic", "openai"):
-            fails = run_case(provider, srv.server_address[1], tmp)
+        for case in ("anthropic", "openai", "openai-responses"):
+            fails = run_case(case, srv.server_address[1], tmp)
             if fails:
                 failed = True
-                print(f"[FAIL] {provider} client: " + "; ".join(fails))
+                print(f"[FAIL] {case} client: " + "; ".join(fails))
             else:
-                print(f"[PASS] {provider} client: 4 model turns, 3 tool calls, {SEEN['tool_results']} tool results, image delivered, verifiers ran")
+                print(f"[PASS] {case} client: 4 model turns, 3 tool calls, {SEEN['tool_results']} tool results, image delivered, verifiers ran")
     finally:
         srv.shutdown()
         shutil.rmtree(tmp, ignore_errors=True)
