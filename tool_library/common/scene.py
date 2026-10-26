@@ -211,7 +211,9 @@ def camera_arg(model, camera):
     if isinstance(camera, str):
         if mujoco.mj_name2id(model, CAMERA, camera) < 0:
             names = [model.camera(i).name for i in range(model.ncam)]
-            raise ValueError(f"camera '{camera}' is not in the scene; cameras: {names}")
+            hint = (" (this takes a scene camera's name, not a camera file; the video camera is 'video_cam')"
+                    if camera.endswith(".json") and "video_cam" in names else "")
+            raise ValueError(f"camera '{camera}' is not in the scene; cameras: {names}{hint}")
     return camera
 
 

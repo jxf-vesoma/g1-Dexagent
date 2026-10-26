@@ -132,6 +132,8 @@ def main(argv=None):
     ap.add_argument("--video"), ap.add_argument("--semantic"), ap.add_argument("--name"), ap.add_argument("--egodex")
     ap.add_argument("--max-rounds", type=int)
     ap.add_argument("--llm", default="config", help="config (the YAML's agent block) or mock:<turns.json>")
+    ap.add_argument("--skip-preflight", action="store_true",
+                    help="start even when SAM 3 cannot be loaded (its source-receipted hand masks are then unavailable)")
     a = ap.parse_args(argv)
     cfg = load_config(a.config)
     if a.video:
@@ -175,6 +177,17 @@ def main(argv=None):
         from agent.llm import load_mock
         llm = load_mock(a.llm[5:], "stage2")
     else:
+        if not a.skip_preflight:
+            # the reference masks (hands above all) must come from SAM 3; without it every later round is spent in vain
+            from agent.preflight import check_sam3
+            ready, why = check_sam3(cfg)
+            print(f"  preflight: {why}", flush=True)
+            if not ready:
+                failure = (f"{why.rstrip('.')}. Install SAM 3 and torch in that interpreter (or set environments.sam3), make the "
+                           "facebook/sam3 checkpoint available (`hf auth login` with granted access), or pass --skip-preflight")
+                (ws / "run.json").write_text(json.dumps({"finished": False, "stage": "stage2", "workspace": str(ws), "failure": failure}, indent=1))
+                print(f"  stage 2 not started: {failure}", flush=True)
+                return 1
         from agent.budget import BudgetError
         from agent.llm import make_llm
         try:

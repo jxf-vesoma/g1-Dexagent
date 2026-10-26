@@ -158,7 +158,12 @@ class StageRunner:
     def run_tool(self, name: str, args: dict) -> tuple[list[dict], dict]:
         """Returns (content blocks for the model, raw record for the trace)."""
         if name == "look":
-            r = self.dev.look(**args)
+            try:
+                r = self.dev.look(**args)
+            except TypeError as e:
+                r = {"ok": False, "error": f"{type(e).__name__}: {e}",
+                     "input_schema": next(s["input_schema"] for s in BUILTIN_SCHEMAS if s["name"] == "look")}
+                return [{"type": "text", "text": _clip(json.dumps(r, default=str, indent=1))}], r
             blocks = []
             for im in r["images"]:
                 if "error" in im:
