@@ -20,6 +20,8 @@ limit, and the plan never knew a pose was out of reach). Here the arm is part of
 """
 from __future__ import annotations
 
+import copy
+
 import numpy as np
 import mujoco
 
@@ -38,7 +40,13 @@ DEFAULTS = dict(tol_pos_m=0.0005, tol_rot_deg=0.3,          # the arm holds the 
                 transit_pos_m=0.03, transit_rot_deg=10.0,    # ... and by this much in a transit phase
                 max_speed_deg_s=90.0,                         # arm joint speed ceiling (slower legs are retimed; joint_speed_check allows 3.5 deg/frame)
                 jump_rad=0.35,                                # a joint step above this in one frame is a branch jump
+                limit_band_deg=15.0,                          # a redundant arm's nullspace pushes joints out of this band at their stops
+                torso_tol_m=0.002,                            # an arm link sunk deeper than this into a torso is not a solution
                 n_seeds=10, ik_iters=60)
+
+
+def _visible(model, g):
+    return int(model.geom_group[g]) <= 2 and int(model.geom_type[g]) != int(mujoco.mjtGeom.mjGEOM_PLANE) and model.geom_rgba[g, 3] > 0
 
 
 def _parts(model):
@@ -107,6 +115,51 @@ class ArmSide:
         q0 = model.key_qpos[0] if model.nkey else model.qpos0
         self.home = np.asarray(q0, float)[self.arm.qadr].copy()
         self.rng = np.random.default_rng(0)
+        self._probe = self._torso_probe()
+
+    def _torso_probe(self):
+        """(model copy, data) where only this arm's links (not its base link, which the shoulder socket holds) collide
+        with a torso: robot bodies of neither station. None when the scene has no torso."""
+        m = self.model
+        torso = [g for g in range(m.ngeom) if _visible(m, g) and (n := m.body(int(m.geom_bodyid[g])).name or "").startswith("robot_")
+                 and not n.startswith(("robot_left", "robot_right"))]
+        if not torso:
+            return None
+        arm = []
+        for g in range(m.ngeom):
+            b = int(m.geom_bodyid[g])
+            if not (_visible(m, g) and (m.body(b).name or "").startswith(f"robot_{self.side}_arm_")):
+                continue
+            n_j, c = 0, b
+            while c > 0:
+                n_j += int(m.body_jntnum[c]); c = int(m.body_parentid[c])
+            if n_j > 1:
+                arm.append(g)
+        if not arm:
+            return None
+        pm = copy.deepcopy(m)
+        pm.geom_contype[:] = 0; pm.geom_conaffinity[:] = 0
+        pm.geom_contype[torso] = 2; pm.geom_conaffinity[arm] = 2
+        pm.body_contype[:] = 0; pm.body_conaffinity[:] = 0       # the broadphase filters on the compiled body bits too
+        pm.body_contype[pm.geom_bodyid[torso]] = 2; pm.body_conaffinity[pm.geom_bodyid[arm]] = 2
+        pm.geom_margin[:] = 0.0; pm.geom_gap[:] = 0.0
+        pm.opt.disableflags = int(pm.opt.disableflags) & ~int(mujoco.mjtDisableBit.mjDSBL_CONTACT)
+        return pm, mujoco.MjData(pm)
+
+    def torso_depth(self, q, qa):
+        """How deep (m) this arm at qa (the rest of the scene at q) sinks into a torso; 0 when clear or no torso."""
+        if self._probe is None:
+            return 0.0
+        pm, pd = self._probe
+        pd.qpos[:] = q
+        pd.qpos[self.arm.qadr] = qa
+        mujoco.mj_kinematics(pm, pd)
+        mujoco.mj_collision(pm, pd)
+        n = int(pd.ncon)
+        return max(0.0, -float(np.min(pd.contact.dist[:n]))) if n else 0.0
+
+    def clear(self, q, qa):
+        return self.torso_depth(q, qa) <= self.cfg["torso_tol_m"]
 
     # --- poses
     def flange_target(self, q):
@@ -169,11 +222,24 @@ class ArmSide:
         score = np.linalg.norm(P - np.asarray(p), axis=1) + 0.08 * ang
         return [Qs[i] for i in np.argsort(score)[:int(k)]]
 
+    def _rest(self, seed):
+        """The seed with every joint inside limit_band_deg of a stop moved out of the band: the posture the nullspace of
+        a redundant arm (the G1's elbow swivel) is pulled toward, so tracking a hand path does not pin a joint at its
+        stop while an equally exact configuration off the stop exists. None when no joint is in the band."""
+        band = np.radians(self.cfg["limit_band_deg"])
+        lo, hi = self.arm.lo, self.arm.hi
+        inner = np.clip(seed, lo + np.minimum(band, (hi - lo) / 2), hi - np.minimum(band, (hi - lo) / 2))
+        return None if np.allclose(inner, seed) else inner
+
     def _ik(self, q, p, R, seed, iters):
         d = self.data
         d.qpos[:] = q
         d.qpos[self.arm.qadr] = seed
-        ep, er = self.arm.solve(d, p, R, iters=iters, rot_weight=0.5, damping=1e-3, max_step=0.3)
+        ep, er = self.arm.solve(d, p, R, rest=self._rest(np.asarray(seed, float)), iters=iters, rot_weight=0.5,
+                                damping=1e-3, max_step=0.3)
+        rest = self._rest(d.qpos[self.arm.qadr].copy())
+        if rest is not None:                          # converged into the band from outside it: push out from there
+            ep, er = self.arm.solve(d, p, R, rest=rest, iters=iters, rot_weight=0.5, damping=1e-3, max_step=0.3)
         return float(ep), float(er), d.qpos[self.arm.qadr].copy()
 
     def ok(self, ep, er):
@@ -188,7 +254,8 @@ class ArmSide:
         branches are searched only when it is not (or when `multistart` is forced on by the caller)."""
         c = self._ik(q, p, R, prev, self.cfg["ik_iters"])
         cont = np.abs(c[2] - prev).max() <= self.cfg["jump_rad"]
-        if cont and (self.ok(c[0], c[1]) or (self.within_projection(c[0], c[1]) and multistart != "force")):
+        if cont and (self.ok(c[0], c[1]) or (self.within_projection(c[0], c[1]) and multistart != "force")) \
+                and (not multistart or self.clear(q, c[2])):
             return c
         if not multistart:
             return c
@@ -202,7 +269,14 @@ class ArmSide:
             cands += [self._ik(q, p, R, s, 3 * self.cfg["ik_iters"]) for s in more]
             good = [x for x in cands if self.ok(x[0], x[1])]
         if good:
-            return min(good, key=lambda x: float(np.abs(x[2] - prev).max()))
+            # through a torso is not a way to hold the hand while a clear configuration does
+            clear = [x for x in good if self.clear(q, x[2])]
+            if not clear and multistart == "force":
+                more = self.nearest_seeds(p, R, k=40)[self.cfg["n_seeds"] // 2:] + [self.rng.uniform(self.arm.lo, self.arm.hi) for _ in range(8)]
+                extra = [x for x in (self._ik(q, p, R, s, 3 * self.cfg["ik_iters"]) for s in more) if self.ok(x[0], x[1])]
+                good += extra
+                clear = [x for x in extra if self.clear(q, x[2])]
+            return min(clear or good, key=lambda x: float(np.abs(x[2] - prev).max()))
         return min(cands, key=lambda x: x[0] + 0.05 * x[1] + 0.002 * float(np.abs(x[2] - prev).max()))
 
     def put_hand(self, q, qa):
@@ -675,6 +749,9 @@ def screen_poses(model, side, poses, q_base, probe=None, arm_seed=None, cfg=None
             if probe is not None:
                 qq2 = qq.copy(); qq2[S.arm.qadr] = qa
                 hits += probe.check(qq2[None], frames=[0])
+            depth = S.torso_depth(qq, qa)
+            if depth > cfg["torso_tol_m"]:
+                hits.append({"frame": 0, "label": label, "depth_mm": round(1000 * depth, 1), "geoms": ["robot_torso", f"robot_{side}_arm"]})
             if ep > cfg["project_pos_m"] or er > np.radians(cfg["project_rot_deg"]) or hits:
                 failed_at = label
                 break

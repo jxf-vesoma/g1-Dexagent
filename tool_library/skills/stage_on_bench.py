@@ -99,6 +99,29 @@ def _absolute_assets(spec, base_dir):
 ASSET_KEYS = {"name", "xml", "x", "y", "z", "yaw_deg", "pitch_deg", "roll_deg", "quat", "joints"}
 
 
+_JOINT_FIELDS = ("armature", "damping", "frictionloss", "stiffness")
+
+
+def _exact_joint_values(xml, world_text):
+    """`xml` (MjSpec.to_xml, which writes 6 significant digits) with the world's own joints carrying the world file's
+    armature / damping / frictionloss / stiffness strings verbatim: joint_armature_damping_check compares them to the
+    setup at a relative 1e-6, and 0.003609725 written as 0.00360972 fails it."""
+    exact = {}
+    for m in re.finditer(r'<joint\b[^>]*>', world_text):
+        name = re.search(r'\bname="([^"]+)"', m.group(0))
+        if name:
+            exact[name.group(1)] = {f: v.group(1) for f in _JOINT_FIELDS
+                                    if (v := re.search(rf'\b{f}="([^"]+)"', m.group(0)))}
+
+    def fix(m):
+        tag = m.group(0)
+        name = re.search(r'\bname="([^"]+)"', tag)
+        for f, v in (exact.get(name.group(1), {}) if name else {}).items():
+            tag = re.sub(rf'\b{f}="[^"]*"', f'{f}="{v}"', tag)
+        return tag
+    return re.sub(r'<joint\b[^>]*>', fix, xml)
+
+
 def asset_rotation(a):
     """The asset's orientation in the rig frame: 'quat' (w, x, y, z), else Rz(yaw) Ry(pitch) Rx(roll) from the degree keys."""
     unknown = sorted(set(a) - ASSET_KEYS)
@@ -205,7 +228,7 @@ def stage_on_bench(world_xml, assets, out_xml, arm_roots=("robot_left_arm_root",
             if len(old_c) and len(old_c) < model.nu:
                 key.ctrl = np.concatenate([old_c, np.zeros(model.nu - len(old_c))]).tolist()
         model = spec.compile()
-    out.write_text(spec.to_xml())
+    out.write_text(_exact_joint_values(spec.to_xml(), Path(world_xml).read_text()))
     return {"out_xml": str(out), "origin": [round(float(v), 4) for v in origin],
             "R": [[round(float(v), 6) for v in row] for row in R], "assets": placed,
             "nq_before": nq_before, "nq_after": int(model.nq)}

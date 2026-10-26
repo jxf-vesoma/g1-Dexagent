@@ -38,7 +38,7 @@ TOOL = {
         {"name": "max_joint_speed_deg_s", "type": "float", "description": "Arm joint speed that fails (a branch flip shows here). Default 180."},
         {"name": "limit_margin_deg", "type": "float", "description": "Warn when a joint runs closer than this to its stop. Default 2."},
         {"name": "baseline", "type": "str | None", "description": "Deprecated: baseline-relative acceptance is rejected; each episode must meet absolute limits."},
-        {"name": "setup", "type": "str | None", "description": "Trusted setup directory providing the calibrated mount."},
+        {"name": "setup", "type": "str | None", "description": "Trusted setup directory providing the calibrated mount (default the repository setup the scene names in its custom text dexagent_setup, else setup/)."},
     ],
     "outputs": [
         {"name": "report", "type": "dict", "description": "ok, failed, per side {mount, pos_err_mm {max, mean, worst_frame, label}, tilt_err_deg {...}, frames_over, peak_joint_speed_deg_s, speed_frames_over, limit_margin_deg, joints_at_limit}. Poses mode: ok, reachable [indices], issues, poses [{index, source, ok, reach_ok, pos_err_mm, rot_err_deg, arm_qpos, arm_hits [{geoms, depth_mm, what}], own_hand_mm}]."},
@@ -120,6 +120,8 @@ def arm_reach_check(scene, trajectory=None, pos_tol_m=0.002, tilt_tol_deg=2.0, l
         failed.append("missing robot hands")
     from tool_library.common.rigid_robot import trusted_mounts
     from pathlib import Path
+    from tool_library.common.rigid_robot import setup_dir_named
+    setup = setup or setup_dir_named(model)
     mounts = trusted_mounts(**({"setup_scene": str(Path(setup) / "scene.xml")} if setup else {}))
     for side, pt in parts.items():
         if pt["gripper"] < 0 or not pt["arm_joints"]:

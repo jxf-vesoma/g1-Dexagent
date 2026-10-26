@@ -52,11 +52,23 @@ def round_budget(cfg: dict, semantic: Path) -> tuple[int, str]:
                    if per else f"{total} rounds")
 
 
+def setup_hand_files(setup) -> list[str]:
+    """The stations' hand MJCFs named in the setup's setup.yaml (stations.<side>.hand_xml); the default bench's Sharpa
+    hands when the file does not say."""
+    try:
+        import yaml
+        st = (yaml.safe_load((Path(setup) / "setup.yaml").read_text()) or {}).get("stations") or {}
+        files = [str(st[s]["hand_xml"]) for s in ("left", "right") if (st.get(s) or {}).get("hand_xml")]
+    except (OSError, TypeError, ValueError, ImportError):
+        files = []
+    return files or ["robot/sharpa_left.xml", "robot/sharpa_right.xml"]
+
+
 def user_message(video: Path, semantic: Path, recon: Path, workspace: Path, cfg: dict, budget: str | None = None) -> str:
     setup = cfg["inputs"].get("setup")
     s3 = cfg.get("stage3") or {}
     lines = [f"Workspace: {workspace}", f"Video: {video}", f"Stage 1 deliverable: {semantic}", f"Stage 2 deliverable: {recon} (scene.xml, camera.json, assets/ next to it)",
-             f"Setup folder: {setup} (setup.yaml, robot/sharpa_left.xml, robot/sharpa_right.xml)",
+             f"Setup folder: {setup} (setup.yaml, {', '.join(setup_hand_files(setup))})",
              f"Stage 4 samples requested: {int((cfg.get('stage4') or {}).get('num_samples', 3))}"]
     hands = [p for p in (recon.parent / "hands.npz", recon.parent / "hands" / "hands.npz") if p.exists()]
     if hands:

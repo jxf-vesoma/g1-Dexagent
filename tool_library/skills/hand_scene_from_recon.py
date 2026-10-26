@@ -27,8 +27,8 @@ TOOL = {
         {"name": "grasp_body", "type": "str | None", "description": "Body of the part to grasp when it is not the object's root (default: the target's root, or the target itself when it names a part)."},
         {"name": "state", "type": "str | list | None", "description": "A trajectory.npz (last frame, or frame given by `frame`) or a qpos list giving the objects' current poses; default the scene's keyframe 0."},
         {"name": "frame", "type": "int", "description": "Frame of the state npz to use. Default -1 (last)."},
-        {"name": "hand_xml", "type": "str | None", "description": "Hand MJCF; default <setup>/robot/sharpa_<side>.xml."},
-        {"name": "setup_dir", "type": "str | None", "description": "Setup folder (default the repository's setup/)."},
+        {"name": "hand_xml", "type": "str | None", "description": "Hand MJCF; default the setup's stations.<side>.hand_xml (setup.yaml), else <setup>/robot/sharpa_<side>.xml."},
+        {"name": "setup_dir", "type": "str | None", "description": "Setup folder (default the one the bench scene names in its custom text dexagent_setup, else the repository's setup/)."},
         {"name": "include", "type": "list[str] | None", "description": "Object ids to include as obstacles (default all)."},
         {"name": "out_json", "type": "str | None", "description": "Write the scene dict here."},
     ],
@@ -52,6 +52,24 @@ import numpy as np
 from scipy.spatial.transform import Rotation as Rot
 
 from tool_library.common import episode as E
+
+
+def _scene_setup(model, repo):
+    """The setup folder the bench scene was built from (its custom text dexagent_setup), else the default bench."""
+    from tool_library.common.rigid_robot import setup_dir_named
+    return setup_dir_named(model) or repo / "setup"
+
+
+def setup_hand_xml(setup, side):
+    """The hand MJCF of the setup's `side` station (setup.yaml stations.<side>.hand_xml, relative to the setup), else
+    the default bench's Sharpa hand file in that setup."""
+    setup = Path(setup)
+    try:
+        import yaml
+        rel = ((yaml.safe_load((setup / "setup.yaml").read_text()) or {}).get("stations") or {}).get(side, {}).get("hand_xml")
+    except (OSError, ValueError, AttributeError, ImportError):
+        rel = None
+    return setup / rel if rel else setup / "robot" / f"sharpa_{side}.xml"
 
 
 def _scene_state_signature(hand_scene):
@@ -196,8 +214,8 @@ def hand_scene_from_recon(scene_recon_json, side, target, grasp_body=None, state
         data.qpos[:] = np.asarray(state, float)
     mujoco.mj_forward(model, data)
     repo = Path(__file__).resolve().parents[2]
-    setup = Path(setup_dir) if setup_dir else repo / "setup"
-    hand_xml = str(Path(hand_xml).resolve()) if hand_xml else str(setup / "robot" / f"sharpa_{side}.xml")
+    setup = Path(setup_dir) if setup_dir else _scene_setup(model, repo)
+    hand_xml = str(Path(hand_xml if hand_xml else setup_hand_xml(setup, side)).resolve())
     if not Path(hand_xml).exists():
         raise FileNotFoundError(f"hand MJCF not found: {hand_xml}")
     objs = man.get("objects", [])

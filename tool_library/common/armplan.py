@@ -42,6 +42,7 @@ DEFAULTS = dict(margins_m=(0.02, 0.01, 0.005),    # the clearance a planned leg 
                 trigger_m=0.0,                    # a straight leg is replanned when it comes closer than this (it penetrates)
                 slope_m_rad=0.15,                 # near an end the required clearance is the end's own + this per radian away
                 res_rad=0.02,                     # largest joint change between two checked configurations
+                limit_keepout_rad=0.087,          # a planned leg stays this far off each joint stop (less where its own ends are closer)
                 step_rad=0.25,                    # RRT extension step
                 iters=3000, time_s=3.0,           # RRT budget per margin
                 shortcut_iters=150,
@@ -461,9 +462,12 @@ class ArmPlanner:
         plane = mujoco.mjtGeom.mjGEOM_PLANE
         for g in spec.geoms:
             body = g.parent.name if g.parent is not None else ""
-            if body.startswith("robot_"):
+            if body.startswith(("robot_left", "robot_right")):
                 is_arm = "_arm_" in body
                 on = (is_arm and int(g.group) <= 2 and g.type != plane and g.rgba[3] > 0) or (not is_arm and "_collision_hand_" in (g.name or ""))
+                g.contype, g.conaffinity = (1, 1) if on else (0, 0)
+            elif body.startswith("robot_"):           # robot parts of neither station (a torso): static obstacles
+                on = int(g.group) <= 2 and g.type != plane and g.rgba[3] > 0
                 g.contype, g.conaffinity = (1, 1) if on else (0, 0)
             g.margin, g.gap = 0.0, 0.0
         for p in list(spec.pairs):
@@ -482,7 +486,7 @@ class ArmPlanner:
         for g in col:
             b = int(m.geom_bodyid[g])
             n = m.body(b).name or ""
-            if n.startswith("robot_"):
+            if n.startswith(("robot_left", "robot_right")):
                 side = "left" if n.startswith("robot_left") else "right"
                 if "_arm_" in n:
                     mount = b == grip.get(side) or any(int(m.body_parentid[c]) == b for c in [grip.get(side, -1)] if c >= 0)
@@ -496,6 +500,7 @@ class ArmPlanner:
         # table whatever the arm does (the right station's link 1 sat 18 mm over the shifted bench): for them only
         # penetration counts, not the margin
         self.base_geom = np.zeros(m.ngeom, bool)
+        self.shoulder_geom = np.zeros(m.ngeom, bool)   # the links a torso's shoulder shell wraps (base and next link)
         for g in col:
             side, kind = self.role0[int(g)]
             if side is not None and kind == "arm":
@@ -504,11 +509,19 @@ class ArmPlanner:
                     n_j += int(m.body_jntnum[b])
                     b = int(m.body_parentid[b])
                 self.base_geom[g] = n_j <= 1
+                self.shoulder_geom[g] = n_j <= 2
         # static scene bodies (the table, the world) versus objects: an idle hand near an object is engaged
         self.static_geoms = {int(g) for g in col if self.role0[int(g)][1] == "world"
-                             and (int(m.geom_bodyid[g]) == 0 or "table" in (m.body(int(m.geom_bodyid[g])).name or ""))}
+                             and (int(m.geom_bodyid[g]) == 0 or "table" in (m.body(int(m.geom_bodyid[g])).name or "")
+                                  or (m.body(int(m.geom_bodyid[g])).name or "").startswith("robot_"))}
         self.static_geom = np.zeros(m.ngeom, bool)
         self.static_geom[list(self.static_geoms)] = True
+        # a torso holds each arm's base link in its shoulder socket (that assembled overlap is not a collision) and
+        # wraps the next link a few mm off whatever the arm does: for it only penetration counts, not the margin
+        self.torso_geom = np.zeros(m.ngeom, bool)
+        for g in self.static_geoms:
+            n = m.body(int(m.geom_bodyid[g])).name or ""
+            self.torso_geom[g] = n.startswith("robot_") and not n.startswith(("robot_left", "robot_right"))
         self.free_body = {}                           # free-joint qpos address -> geoms of the subtree it moves
         for j in range(m.njnt):
             if int(m.jnt_type[j]) == int(mujoco.mjtJoint.mjJNT_FREE):
@@ -591,6 +604,9 @@ class ArmPlanner:
                 if v >= best:
                     break
                 g1, g2 = int(d.contact.geom1[i]), int(d.contact.geom2[i])
+                if (self.torso_geom[g1] and self.shoulder_geom[g2]) or (self.torso_geom[g2] and self.shoulder_geom[g1]):
+                    if self.base_geom[g1] or self.base_geom[g2] or v >= 0.0:
+                        continue
                 if v >= 0.0 and ((self.base_geom[g1] and self.static_geom[g2]) or (self.base_geom[g2] and self.static_geom[g1])):
                     continue                          # a base link near the table: only penetration counts
                 if v == 0.0:                          # a false zero of the convex collider: re-measured
@@ -685,12 +701,15 @@ class ArmPlanner:
         c0, c1 = c_ends
         a0, a1 = (qa0, qa1) if q_ends is None else q_ends
         lo, hi = self.arm[side].arm.lo, self.arm[side].arm.hi
+        keep = np.minimum(float(self.cfg["limit_keepout_rad"]),
+                          np.minimum.reduce([np.minimum(a - lo, hi - a) for a in (np.asarray(qa0), np.asarray(qa1), a0, a1)]))
+        keep = np.maximum(keep, 0.0)
 
         def req(qa):
             return min(margin, c0 - 1e-3 + slope * float(np.abs(qa - a0).max()), c1 - 1e-3 + slope * float(np.abs(qa - a1).max()))
 
         def valid(qa):
-            if (qa < lo - 1e-9).any() or (qa > hi + 1e-9).any():
+            if (qa < lo + keep - 1e-9).any() or (qa > hi - keep + 1e-9).any():
                 return False
             need = req(qa)
             for ctx in contexts:

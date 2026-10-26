@@ -14,7 +14,10 @@ skills and verifiers:
   contype/conaffinity 0 and are switched on through explicit contact pairs.
 
 The Sharpa and Shadow hands used in the paper both follow it; a different hand
-is supported by passing a ``HandSpec`` with its own name patterns. Everything
+is supported by passing a ``HandSpec`` with its own name patterns. A parallel-jaw
+gripper (the Unitree Dex1 of ``setup_g1_dex1``) follows it with two fingers whose
+single joints are slides, ``<side>_thumb_jaw`` and ``<side>_index_jaw``, each
+closing toward the high end of its range (``PARALLEL_JAW_HAND_SPEC``). Everything
 that drives the hand goes through the actuators (``ctrl``), never through
 external forces: an object moves only because a finger pushed it.
 
@@ -54,11 +57,16 @@ DEFAULT_HAND_SPEC = {
     "fingers": list(FINGERS),
 }
 
+# A two-jaw parallel gripper: one slide per jaw, the jaws named as the two fingers that pinch. `jaw_joints` lists the
+# joint roles the rig expects; the jaws close toward the high end of their range, as a flexion joint does.
+PARALLEL_JAW_HAND_SPEC = dict(DEFAULT_HAND_SPEC, fingers=["thumb", "index"], palm_body_suffixes=["_palm"],
+                              jaw_joints=["{side}_thumb_jaw", "{side}_index_jaw"])
+
 # How a finger joint behaves when the hand "closes" to a grip fraction.
 # Sharpa names flexion joints *_FE / *_PIP / *_DIP / *_IP, abduction *_AA;
 # Shadow uses FFJ1..4, MFJ, RFJ, LFJ1..5, THJ1..5 (J4 = abduction, THJ5 =
-# thumb opposition, LFJ5 = the pinky's palm arch).
-_FLEX_SUFFIXES = ("_FE", "_PIP", "_DIP", "_IP", "pinky_CMC")
+# thumb opposition, LFJ5 = the pinky's palm arch); a parallel jaw's slide is *_jaw.
+_FLEX_SUFFIXES = ("_FE", "_PIP", "_DIP", "_IP", "pinky_CMC", "_jaw")
 _THUMB_OPPOSE = ("thumb_CMC_AA", "thumb_MCP_AA")
 _SHADOW_ABDUCT = re.compile(r"^(FF|MF|RF|LF)J4$")
 _SHADOW_JOINT = re.compile(r"^(FF|MF|RF|LF|TH)J[1-5]$")
@@ -87,6 +95,25 @@ def finger_of_joint(short: str) -> str | None:
             return f
     m = re.match(r"^(FF|MF|RF|LF|TH)J", short)
     return _SHADOW_FINGER[m.group(1)] if m else None
+
+
+def hand_spec_for(model, prefix: str, side: str) -> dict:
+    """The HandSpec of the hand under `prefix` in a compiled model: PARALLEL_JAW_HAND_SPEC when its jaw joints are
+    there, else DEFAULT_HAND_SPEC (Sharpa / Shadow)."""
+    jaws = [prefix + j.format(side=side) for j in PARALLEL_JAW_HAND_SPEC["jaw_joints"]]
+    if all(mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, j) >= 0 for j in jaws):
+        return dict(PARALLEL_JAW_HAND_SPEC)
+    return dict(DEFAULT_HAND_SPEC)
+
+
+def jaw_roles(rig) -> dict:
+    """{finger: short joint name} of a parallel-jaw rig's jaws ({} for a hand with articulated fingers)."""
+    out = {}
+    for pat in rig.spec.get("jaw_joints") or ():
+        short = pat.format(side=rig.side)[len(rig.side) + 1:]
+        if short in rig.finger_qpos:
+            out[finger_of_joint(short)] = short
+    return out
 
 
 def euler_to_mat(e) -> np.ndarray:
@@ -144,7 +171,7 @@ class HandRig:
 
     @classmethod
     def build(cls, model, prefix: str, side: str, spec: dict | None = None) -> "HandRig":
-        spec = dict(DEFAULT_HAND_SPEC, **(spec or {}))
+        spec = dict(hand_spec_for(model, prefix, side), **(spec or {}))
         rig = cls(model=model, prefix=prefix, side=side, spec=spec)
         suf = spec["actuator_suffix"]
         head = f"{prefix}{side}_"
@@ -206,6 +233,12 @@ class HandRig:
                 rig.palm_body = int(b)
                 break
         return rig
+
+    @property
+    def fingers(self) -> tuple:
+        """The fingers this hand has (a tip site each), in the spec's order: FINGERS for Sharpa, thumb and index
+        for a parallel jaw."""
+        return tuple(f for f in self.spec["fingers"] if f in self.fingertip_sites)
 
     # -- reading and writing the hand's state -------------------------------
     def wrist_pos(self, data) -> np.ndarray:
@@ -314,14 +347,34 @@ FINGER_ARMATURE = 0.05     # a finger joint's reflected inertia; the shipped 1.0
 FINGER_KP = None           # finger servo stiffness (N m / rad); None keeps the asset's (300). A saturated stiff servo
                            # cannot balance a pinch: two fingers at the cap push harder than one thumb.
 
+JAW_FORCE_N = 20.0         # force cap of a parallel jaw's slide servo (Unitree Dex1-1: 20 N per finger). A jaw's
+                           # servo gains and reflected inertia are the gripper's own (kp 2000 N/m, kv 100 N s/m)
+
+
+def finger_is_slide(model, rig: HandRig, short: str) -> bool:
+    """Whether the finger joint `short` is a slide (a parallel jaw) rather than a hinge."""
+    a = rig.finger_act[short]
+    return int(model.jnt_type[int(model.actuator_trnid[a][0])]) == int(mujoco.mjtJoint.mjJNT_SLIDE)
+
+
+def finger_force_cap(model, rig: HandRig, short: str, finger_force_nm: float = FINGER_FORCE_NM) -> float:
+    """The trusted force cap of one finger servo: JAW_FORCE_N (N) for a slide jaw, `finger_force_nm` (N m) for a
+    hinge."""
+    return float(JAW_FORCE_N) if finger_is_slide(model, rig, short) else float(finger_force_nm)
+
 
 def limit_hand_forces(model, rig: HandRig, finger_force_nm: float = FINGER_FORCE_NM, wrist_force_n: float = WRIST_FORCE_N,
                       wrist_torque_nm: float = WRIST_TORQUE_NM, finger_armature: float = FINGER_ARMATURE,
                       wrist_rot_armature: float = WRIST_ROT_ARMATURE, finger_kp: float | None = FINGER_KP) -> dict:
     """Clamp the hand's actuator forces to what a real hand and arm deliver, and give the finger joints a
     plausible reflected inertia with the servo damping recomputed for it (critical). 0 or None leaves an
-    actuator unlimited / the armature as shipped."""
+    actuator unlimited / the armature as shipped. A prismatic jaw is capped at JAW_FORCE_N and keeps its own
+    gains and armature: the hinge finger's torque cap, armature and kp are rotary quantities."""
     for k, a in rig.finger_act.items():
+        if finger_is_slide(model, rig, k):
+            model.actuator_forcelimited[a] = 1
+            model.actuator_forcerange[a] = [-float(JAW_FORCE_N), float(JAW_FORCE_N)]
+            continue
         if finger_force_nm:
             model.actuator_forcelimited[a] = 1
             model.actuator_forcerange[a] = [-float(finger_force_nm), float(finger_force_nm)]
@@ -565,11 +618,20 @@ def _hand_self_geom_pairs(model, gids):
                   if model.geom_type[g] == mujoco.mjtGeom.mjGEOM_MESH
                   and model.geom_group[g] <= 2 and model.geom_rgba[g, 3] > 0
                   and "collision_hand_" not in (model.geom(g).name or ""))
+
+    def on_slide(b):
+        n, a = int(model.body_jntnum[b]), int(model.body_jntadr[b])
+        return n > 0 and all(int(model.jnt_type[j]) == int(mujoco.mjtJoint.mjJNT_SLIDE) for j in range(a, a + n))
+
     for i, g in enumerate(gids):
         bg = int(model.geom_bodyid[g]); pg = int(model.body_parentid[bg])
         for h in gids[i + 1:]:
             bh = int(model.geom_bodyid[h]); ph = int(model.body_parentid[bh])
             if bg == bh or bg in (ph, int(model.body_parentid[ph])) or bh in (pg, int(model.body_parentid[pg])):
+                continue
+            # two jaws sliding on one rail: each jaw's mesh spans the rail, so their hulls always overlap; the joint
+            # range bounds how far they close
+            if pg == ph and on_slide(bg) and on_slide(bh):
                 continue
             yield g, h
 
@@ -835,7 +897,7 @@ def press_targets(rig: HandRig, closed: dict, grip_fingers=(), depth_rad: float 
             if k in rig.finger_qpos:
                 d.qpos[rig.finger_qpos[k]] = float(v)
         mujoco.mj_kinematics(rig.model, d)
-        grip = set(grip_fingers or FINGERS)
+        grip = set(grip_fingers or rig.fingers)
         tips0 = {f: d.site_xpos[rig.fingertip_sites[f]].copy() for f in grip if f in rig.fingertip_sites}
         lo_s, hi_s = 0.0, float(depth_rad)
         for _ in range(12):                              # bisection on the depth for the travel cap
@@ -852,7 +914,7 @@ def press_targets(rig: HandRig, closed: dict, grip_fingers=(), depth_rad: float 
                 lo_s = mid
         depth_rad = lo_s
     out = dict(closed)
-    grip = set(grip_fingers or FINGERS)
+    grip = set(grip_fingers or rig.fingers)
     for k, v in closed.items():
         fin = finger_of_joint(k)
         if fin in grip and joint_role(k) in ("flex", "pinky_arch"):
@@ -1046,7 +1108,7 @@ def approach_open_targets(rig: HandRig, closed: dict, frac: float, grip_fingers=
     keep their posed targets, because opening them pushes the pads into the surface before the hand arrives (a
     fingers-down index opened 55% reached 6.9 mm into a ribbon strip and shoved it 9.4 mm)."""
     grip = list(grip_fingers or [])
-    opened = open_targets(rig, closed, float(frac), curl=[f for f in FINGERS if grip and f not in grip])
+    opened = open_targets(rig, closed, float(frac), curl=[f for f in rig.fingers if grip and f not in grip])
     if grip_posed:
         for k, v in closed.items():
             if k in opened and finger_of_joint(k) in grip:
@@ -1156,7 +1218,7 @@ def finger_contacts(model, data, rig: HandRig, target_gids) -> dict:
         if hand is None or other not in tg:
             continue
         nm = model.geom(hand).name or ""
-        for f in FINGERS:
+        for f in rig.fingers:
             if f"_{f}_" in nm:
                 seen.add(f)
         mujoco.mj_contactForce(model, data, i, buf)
@@ -1562,7 +1624,7 @@ def curl_free_fingers_clear(model, d, rig: HandRig, ids: dict, used: set, fracs=
     into the objects or the floor (least overlap wins when all do). Returns the fraction used."""
     best = None
     # the free fingers' fold is judged by what it can change: their own self-overlap, not the grip fingers' with each other
-    free = [f for f in FINGERS if f not in set(used) and f in rig.fingertip_sites]
+    free = [f for f in rig.fingers if f not in set(used)]
     for fr in fracs:
         curl_free_fingers(rig, d, used, fr)
         mujoco.mj_forward(model, d)
@@ -2637,7 +2699,7 @@ def _stress_rollout(model, data0, rig: HandRig, ids: dict, pose: dict, bid: int,
                            "ok": bool(slip < slip_max_mps and angular_ok and cn["n_finger"] >= 1)})
     if reserve is not None:
         out_phases.append(reserve.report())
-    pen = clearance(model, data, rig, ids, ignore_tips=FINGERS)
+    pen = clearance(model, data, rig, ids, ignore_tips=rig.fingers)
     why = [p["name"] for p in out_phases if not p.get("ok", True)]
     return {"ok": not why, "first_fail": (why[0] if why else None), "phases": out_phases,
             "lifts": lifts, "slip_mm_s": round(slip * 1000, 2),

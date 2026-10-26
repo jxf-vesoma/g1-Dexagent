@@ -160,8 +160,8 @@ def joint_armature_damping_check(scene, reference=None, expected=None, max_omega
             by_f.setdefault(m_["field"], []).append(m_)
         for f, ms in by_f.items():
             less = f == "armature" and any(m_["scene"] < m_["reference"] for m_ in ms)
-            issues.append(f"{len(ms)} joint(s) carry a different {f} than specified (first '{ms[0]['joint']}': {ms[0]['scene']:g} vs "
-                          f"{ms[0]['reference']:g}){' - less armature than specified destabilizes servos' if less else ''}; copy "
+            issues.append(f"{len(ms)} joint(s) carry a different {f} than specified (first '{ms[0]['joint']}': {ms[0]['scene']:.10g} vs "
+                          f"{ms[0]['reference']:.10g}){' - less armature than specified destabilizes servos' if less else ''}; copy "
                           "the setup's joint defaults")
     rows.sort(key=lambda r: (r["problem"] is None, -r["omega_dt"]))
     return C.jsonable({"ok": not issues, "compiled": True, "issues": issues, "timestep": dt,
