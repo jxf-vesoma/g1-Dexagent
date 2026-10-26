@@ -95,6 +95,7 @@ stage4:                                # robot data generation; see stage4_robot
   seed: 0
   views: [wrist_left, wrist_right]     # cameras to render besides `ego` (of those Stage 3 packaged); [] = ego only
   render: {samples: 32, chunks: 4}     # Cycles samples per pixel, render processes per GPU
+  lerobot: {enabled: false, fps: 30}   # true = also write a LeRobot v2.1 dataset (needs render.stride = 30 / fps)
 
 models:                                # checkouts and weights; a tool call that leaves the matching argument out gets these
   hf_home: null                        # Hugging Face cache for SAM 3 / SAM 2 / GeoCalib weights; null = $HF_HOME

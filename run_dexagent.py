@@ -76,7 +76,8 @@ def run_agent_stage(stage: str, cfg_path: str, extra: list[str], cfg: dict) -> d
 
 
 def apply_stage4_settings(task: Path, s4: dict) -> dict:
-    """The `stage4` block of dexagent.yaml (samples, seed, views, render quality) written into the task's stage4.json."""
+    """The `stage4` block of dexagent.yaml (samples, seed, views, render quality, LeRobot export) written into the
+    task's stage4.json."""
     c = json.loads(task.read_text())
     for k in ("num_samples", "seed"):
         if s4.get(k) is not None:
@@ -84,8 +85,9 @@ def apply_stage4_settings(task: Path, s4: dict) -> dict:
     if s4.get("views") is not None:
         views = (c.get("cameras") or {}).get("views") or {}
         c.setdefault("cameras", {})["views"] = {k: v for k, v in views.items() if k in set(s4["views"])}
-    for k, v in (s4.get("render") or {}).items():
-        c.setdefault("render", {})[k] = v
+    for block in ("render", "lerobot"):
+        for k, v in (s4.get(block) or {}).items():
+            c.setdefault(block, {})[k] = v
     task.write_text(json.dumps(c, indent=1))
     return c
 

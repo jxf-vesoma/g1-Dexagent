@@ -48,6 +48,8 @@ c = apply_stage4_settings(task, {"num_samples": 3, "seed": 7, "views": ["wrist_r
 c2 = json.loads(task.read_text())
 check("the stage4 block reaches the task file", c2["num_samples"] == 3 and c2["seed"] == 7 and list(c2["cameras"]["views"]) == ["wrist_right"]
       and c2["render"] == {"stride": 2, "samples": 16, "chunks": 4}, json.dumps(c2))
+c3 = apply_stage4_settings(task, {"lerobot": {"enabled": True, "fps": 30}})
+check("the stage4 block's lerobot settings reach the task file", c3["lerobot"] == {"enabled": True, "fps": 30}, json.dumps(c3))
 
 ex = ROOT / "examples/default/place_cup_in_bowl"
 if (ex / "manifest.json").exists():

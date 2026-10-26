@@ -9,6 +9,7 @@ Steps, in order:
     export      write Blender bundles for every sample and camera view
     render      path-trace the robot and objects (Blender Cycles)
     composite   paste the renders onto the clean plate and encode the videos
+    lerobot     write the episodes as a LeRobot v2.1 dataset (in `all` only when lerobot.enabled is true)
 """
 from __future__ import annotations
 
@@ -21,7 +22,7 @@ from pathlib import Path
 
 from stage4.config import load_config
 
-STEPS = ["randomize", "plate", "export", "render", "composite"]
+STEPS = ["randomize", "plate", "export", "render", "composite", "lerobot"]
 HERE = Path(__file__).resolve().parent
 
 
@@ -78,6 +79,8 @@ def main():
     for s in steps:
         assert s in STEPS, f"unknown step '{s}' (choose from {STEPS})"
     cfg = load_config(args.config)
+    if args.steps == "all" and not (cfg.get("lerobot") or {}).get("enabled"):
+        steps = [s for s in steps if s != "lerobot"]
     cfg.out.mkdir(parents=True, exist_ok=True)
     print(f"[stage4] {cfg.get('name', 'sample')}: steps {steps} -> {cfg.out}", flush=True)
 
@@ -101,6 +104,9 @@ def main():
         elif s == "composite":
             from stage4 import composite
             composite.run(cfg, log)
+        elif s == "lerobot":
+            from stage4 import lerobot
+            lerobot.run(cfg, log)
         log(f"[stage4] {s} finished in {time.time() - ts:.0f}s")
     log(f"[stage4] done in {time.time() - t0:.0f}s -> {cfg.out}")
 
