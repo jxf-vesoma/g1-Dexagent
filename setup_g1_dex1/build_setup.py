@@ -48,7 +48,14 @@ ARM = {"kp": [60., 60., 40., 40., 20., 8., 8.], "kd": [6., 6., 4., 4., 2., .8, .
 # Layout, in the rig frame of setup.yaml (x toward the right arm, y into the work, z up, tabletop at z = 0).
 SHOULDER_Z = 0.30           # shoulder pitch axes 30 cm above the tabletop: a G1 (1.32 m) at a 0.78 m table
 TABLE_NEAR_Y = 0.10         # the table's near edge, 10 cm in front of the shoulders; the torso stays clear of it
-TABLE_HALF = (0.6, 0.45, 0.02)
+TABLE_HALF = (0.6, 0.40, 0.02)    # the lab table: 1.2 m wide, 0.8 m deep
+# The real head camera (D435i colour, 640 x 480, fx = fy = 612.48 px, centred, no distortion) against the model's:
+# fitted to a real frame of the 10 cm coaster, the 6 x 10 cm cup and the table's far edge
+# (runs/g1_cup_on_coaster/real_head/), it sits 1.1 cm lower and looks 2.8 deg less steeply down (a slight lean of the
+# standing robot, or the mount's tolerance). Applied in the camera frame: height, then turns about its x and z axes.
+HEAD_CAM_FY_PX = 612.48
+HEAD_CAM_DZ = -0.0106
+HEAD_CAM_TURN_DEG = (2.77, 0.25)
 # Home: each gripper resting low beside the work, as the demonstrator's hand rests on the table: 23 cm out to its
 # side, 6 cm in front of the shoulders and 8 cm above the table (the casting's underside ~4 cm up), its jaws pointing
 # into the work 10 deg down, jaws half open. The jaw tips end ~20 cm in front, clear of a 6 cm cup up to 13 cm from the middle.
@@ -548,7 +555,8 @@ def write_scene(src: Source, home=None):
 
 
 def ego_camera(src: Source):
-    """The G1's head camera (the D435i colour camera of the source), in the rig frame: the robot's own view."""
+    """The G1's head camera (the D435i colour camera of the source), in the rig frame: the robot's own view, with the
+    real camera's calibration (HEAD_CAM_*) applied."""
     m, d = src.model, src.data
     c = m.camera("camera/head/color").id
     t = src.body("torso_link")
@@ -556,7 +564,9 @@ def ego_camera(src: Source):
     p_t = Rt.T @ (d.cam_xpos[c] - d.xpos[t])
     R_t = Rt.T @ d.cam_xmat[c].reshape(3, 3)
     tp, tR = torso_pose(src)
-    return tR.apply(p_t) + tp, quat_of(tR.as_matrix() @ R_t), float(m.cam_fovy[c])
+    pos = tR.apply(p_t) + tp + [0.0, 0.0, HEAD_CAM_DZ]
+    R = tR.as_matrix() @ R_t @ Rotation.from_euler("XZ", HEAD_CAM_TURN_DEG, degrees=True).as_matrix()
+    return pos, quat_of(R), float(np.degrees(2 * np.arctan(240.0 / HEAD_CAM_FY_PX)))
 
 
 def write_hand(src: Source, side: str):
@@ -782,6 +792,12 @@ cameras:
     pos: {L(cam["right"][0], 6)}
     quat_wxyz: {L(cam["right"][1], 6)}
     fovy_deg: {cam["right"][2]:.2f}
+
+render:                              # Stage 4's Blender materials for the robot (presets of stage4/materials.json); the first match on body/geom/mesh wins
+  materials:
+    - {{match: "^robot_(left_left|right_right)_", preset: black_plastic}}   # the Dex1-1 grippers and their wrist cameras
+    - {{match: "^robot_torso/.*(head|logo)", preset: black_plastic}}
+    - {{match: "^robot_", preset: unitree_grey}}                         # the arms and the torso shell
 
 physics:
   timestep: 0.002

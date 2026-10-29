@@ -17,8 +17,8 @@ frame:                               # the rig frame every number below is in; S
 table:
   body: table
   geom: g_table
-  center: [0, 0.55, -0.02]
-  half_extents: [0.6, 0.45, 0.02]
+  center: [0, 0.5, -0.02]
+  half_extents: [0.6, 0.4, 0.02]
   work_area:                         # bounds of the 5 cm grid points where an arm holds its gripper pointing down with the
                                      # pad centre 5 cm above the table (build_setup.reach_grid); the G1 arm is short:
                                      # beyond y = 0.30 the gripper cannot point straight down
@@ -108,11 +108,11 @@ cameras:
   ego:                               # the G1's head camera (D435i colour); MuJoCo camera `ego`
     width: 640
     height: 480
-    fovy_deg: 42.50
-    focal_px: 617.2                  # = (height / 2) / tan(fovy / 2); fx = fy, principal point at the image centre
-    pos: [-0.03253, 0.0536672, 0.48209]
-    quat_wxyz: [0.932323, 0.361626, 6.64164e-07, -1.71231e-06]   # MuJoCo convention: the camera looks along its -z, y up
-    pitch_deg: 47.60                 # of the optical axis, below horizontal
+    fovy_deg: 42.80
+    focal_px: 612.5                  # = (height / 2) / tan(fovy / 2); fx = fy, principal point at the image centre
+    pos: [-0.03253, 0.0536672, 0.47149]
+    quat_wxyz: [0.923308, 0.384054, -0.000837255, 0.00201262]   # MuJoCo convention: the camera looks along its -z, y up
+    pitch_deg: 44.83                 # of the optical axis, below horizontal
     yaw_deg: 90.00                   # of the optical axis, from +x; 90 is straight into the work
   wrist_left:                        # rigid to the hand root body; the source's Dex1-1 wrist camera
     parent_body: robot_left_left_base_yaw
@@ -124,6 +124,12 @@ cameras:
     pos: [-0.051, 0, 0.072]
     quat_wxyz: [0.183013, 0.683013, -0.683013, -0.183013]
     fovy_deg: 83.58
+
+render:                              # Stage 4's Blender materials for the robot (presets of stage4/materials.json); the first match on body/geom/mesh wins
+  materials:
+    - {match: "^robot_(left_left|right_right)_", preset: black_plastic}   # the Dex1-1 grippers and their wrist cameras
+    - {match: "^robot_torso/.*(head|logo)", preset: black_plastic}
+    - {match: "^robot_", preset: unitree_grey}                         # the arms and the torso shell
 
 physics:
   timestep: 0.002

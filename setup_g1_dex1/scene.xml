@@ -146,11 +146,11 @@
     <mesh name="dex1_pad_2" file="assets/dex1/dex1_col_2.stl"/>
   </asset>
   <worldbody>
-    <camera name="ego" pos="-0.03253 0.0536671971 0.482089953" quat="0.932323138 0.36162628 6.64163749e-07 -1.71230705e-06" fovy="42.5"/>
+    <camera name="ego" pos="-0.03253 0.0536671971 0.471489953" quat="0.923307896 0.384054394 -0.000837255457 0.00201262068" fovy="42.7954121"/>
     <light pos="0 0.35 3.36" dir="0 0 -1" castshadow="false"/>
     <light pos="1.72 1.59 2.86" dir="-0.468 -0.338 -0.816" castshadow="false"/>
-    <body name="table" pos="0 0.55 -0.02">
-      <geom name="g_table" type="box" size="0.6 0.45 0.02" rgba="0.263 0.204 0.142 1"/>
+    <body name="table" pos="0 0.5 -0.02">
+      <geom name="g_table" type="box" size="0.6 0.4 0.02" rgba="0.263 0.204 0.142 1"/>
     </body>
     <body name="robot_torso" pos="-8.7847507e-19 -0.0039563 0.05222" quat="0.707106781 0 0 0.707106781">
       <geom type="mesh" mesh="g1_torso_link_part00" pos="0 0 0" quat="1 0 0 0" contype="0" conaffinity="0" group="1" density="0" rgba="0.7 0.7 0.7 1"/>
