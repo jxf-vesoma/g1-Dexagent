@@ -645,6 +645,12 @@ class SubgoalPlanner:
             self.pl.move_wrist(side, pw + off, Rw)
             self.pl.push(f"{side}: lift {obj}", t_each, 0.3 if i == len(offsets) - 1 else 0.05, side, [obj], anchor=obj)
 
+    def _raise(self, side, obj, offsets, duration):
+        """Play the lift. A zero offset (lift_m 0, a handover that should stay put) adds no phase."""
+        moving = [off for off in offsets if float(np.linalg.norm(off)) > 1e-4]
+        if moving:
+            self._lift(side, obj, moving, duration / len(moving))
+
     def m_grasp_lift(self, sg, side, obj):
         lift = float(sg.get("lift_m", 0.08))
         offsets = self._lift_offsets(sg, lift)
@@ -655,16 +661,18 @@ class SubgoalPlanner:
         if self.state["held"].get(side) == obj and sg.get("pose") is None:
             self.pl.attach(side, obj); self._couple(side, obj)   # already in hand: lift only (with any other hand on it)
             self.pl.fingers(side, self._grip(side)["press"])
-            self._lift(side, obj, offsets, duration / len(offsets))
+            self._raise(side, obj, offsets, duration)
         else:
             pose = self._pose(sg)
             g = self._approach_pose(side, pose, obj, approach_m=float(sg.get("approach_m", 0.08)), **self._approach_timing(sg))
             self.pl.attach(side, obj); self._couple(side, obj)   # a hand already holding it (a two-hand squeeze) lifts too
             self.pl.fingers(side, g["press"])
-            self._lift(side, obj, offsets, duration / len(offsets))
+            self._raise(side, obj, offsets, duration)
         self.state["held"][side] = obj
-        rise = float(offsets[-1][2])
-        exp = {"rise_m": max(0.005, 0.5 * rise), "in_hand": True, "no_slip": True}
+        rise = float(offsets[-1][2]) if offsets else 0.0
+        exp = {"in_hand": True, "no_slip": True}
+        if rise > 1e-4:                                    # lift_m 0 holds where it grasped: no rise phase, no rise check
+            exp["rise_m"] = max(0.005, 0.5 * rise)
         if self.pl.coupled.get(side):
             exp["min_links"] = 1                        # each hand of a two-hand squeeze touches with one face
         return exp
@@ -744,8 +752,12 @@ class SubgoalPlanner:
         tgt, ref = self._target_from(sg, obj)
         via = sg.get("via_height")
         if via is None:
-            pw, _ = self.pl.wrist(side)
-            via = max(pw[2], tgt[2]) + float(sg.get("carry_rise_m", sg.get("clearance_m", 0.05)))
+            # carry_rise_m 0 is a straight move to the hover: a place that already starts above its
+            # spot must not climb again before it descends
+            rise = float(sg.get("carry_rise_m", sg.get("clearance_m", 0.05)))
+            if rise > 0:
+                pw, _ = self.pl.wrist(side)
+                via = max(pw[2], tgt[2]) + rise
         R_t = self._target_R(sg, obj)
         if R_t is None:
             mujoco.mj_kinematics(self.model, self.pl.data)

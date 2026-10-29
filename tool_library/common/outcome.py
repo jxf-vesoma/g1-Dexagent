@@ -45,6 +45,11 @@ def resolve_label_frames(expect, labels):
         expect.pop("slip_from_rel", None)
     if expect.get("no_slip") and "slip_from" not in expect and "slip_from_rel" not in expect:
         starts = [i for i, l in enumerate(labels) if any(w in str(l) for w in SLIP_WORDS)]
+        if not starts:
+            # a grasp that holds without lifting (lift_m 0) has no lift label: judge slip once the fingers have closed,
+            # not from the approach, when the hand is still away from the object
+            closed = [i for i, l in enumerate(labels) if ": grip" in str(l) or ": close" in str(l)]
+            starts = closed[-1:]
         expect["slip_from_rel"] = starts[0] if starts else 0
     st = expect.get("seated")
     if isinstance(st, dict) and st.get("phase") and "frames_rel" not in st:

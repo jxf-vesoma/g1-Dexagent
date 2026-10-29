@@ -47,7 +47,7 @@ TOOL = {
         "(`deformable`: Stage 4 turns it about its middle, with a yaw range that moves its ends no farther than the shift "
         "range, and settles it before re-executing the plan on it). The video camera comes from Stage 2's camera.json with its full intrinsics (fx, fy, cx, cy at its image size), the wrist views from the scene's "
         "cameras under the hand bodies, the table from the scene's table geom, erase prompts from Stage 1's object "
-        "names. Robot materials use the sharpa / yam presets. Copies scene.xml and the assets it references into the "
+        "names. Robot materials come from the setup's setup.yaml render.materials, else the sharpa / yam presets. Copies scene.xml and the assets it references into the "
         "task folder with relative paths."
     ),
     "inputs": [
@@ -316,6 +316,21 @@ def _anchor_to_support(phases, objs):
     return out
 
 
+DEFAULT_MATERIALS = [{"match": "^robot_\\w+_arm_", "preset": "yam_black"}, {"match": "^robot_", "preset": "sharpa"}]
+
+
+def robot_materials(model):
+    """The robot's render material rules: the `render.materials` of the setup the scene names (its custom text
+    dexagent_setup), else the default bench's YAM arms and Sharpa hands."""
+    from tool_library.common.rigid_robot import setup_dir_named
+    d = setup_dir_named(model)
+    if d is None:
+        return DEFAULT_MATERIALS
+    import yaml
+    rules = ((yaml.safe_load((d / "setup.yaml").read_text()) or {}).get("render") or {}).get("materials")
+    return rules or DEFAULT_MATERIALS
+
+
 def write_stage4_config(scene_recon_json, episode_dir, out_dir, human_video, sim_video=None, scene_semantic_json=None,
                         num_samples=3, ranges=None, name=None, scene=None, manifest=None, physics_replay=True,
                         group_clearance_m=0.01, plan=None, deformables=True, fixed_bases=False, next_to=True):
@@ -536,7 +551,7 @@ def write_stage4_config(scene_recon_json, episode_dir, out_dir, human_video, sim
            "table": {"top_z": round(top_z, 4), "center": [round(x, 4) for x in center], "half_size": [round(x, 3) for x in half]},
            "inpaint": {"erase_prompts": prompts, **({"background_prompt": background} if background else {})},
            "render": {"stride": 2, "samples": 32, "chunks": 4, "exclude_geoms": ["^table", "groundplane", "floor", "^g_table"],
-                      "materials": [{"match": "^robot_\\w+_arm_", "preset": "yam_black"}, {"match": "^robot_", "preset": "sharpa"}]}}
+                      "materials": robot_materials(model)}}
     # what the physics replay of every augmented episode re-checks: the subgoal expectations, the servo commands
     # (the executed fingers stop on the object; their commands press), the run-time rules of the scene
     (out / "trajectory_manifest.json").write_text(json.dumps({"source": str(man_src) if man_src else "episode outcomes",

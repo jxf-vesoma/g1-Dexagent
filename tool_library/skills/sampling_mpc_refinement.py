@@ -87,7 +87,7 @@ def _residual(U, knots, f0, f1):
 
 
 def _bounds(sim, max_arm, max_grip):
-    return np.tile(np.r_[np.full(6, max_arm), max_grip], len(sim.sides))
+    return sim.per_side(max_arm, max_grip)
 
 
 def _evaluate(task):
@@ -118,7 +118,7 @@ def sampling_mpc_refinement(workspace, scene_semantic_json, scene_recon_json, re
     knots = _knots(T, kf)
     U = np.zeros((len(knots), sim.dim))
     lim = _bounds(sim, max_arm_rad, max_grip_rad)
-    sigma = np.tile(np.r_[np.full(6, sigma_arm_rad), sigma_grip_rad], len(sim.sides))
+    sigma = sim.per_side(sigma_arm_rad, sigma_grip_rad)
     rng = np.random.default_rng(seed)
     a, b = (int(window[0]), int(window[1])) if window else (0, T - 1)
     rep = {"ok": False, "method": NAME, "out_dir": str(out), "scene": str(scene_p), "reference_in": {"path": ref_in, **info},
@@ -176,8 +176,8 @@ def sampling_mpc_refinement(workspace, scene_semantic_json, scene_recon_json, re
     rep["cost_before"], rep["cost_after"] = round(sim.cost(0, before), 5), round(sim.cost(0, after), 5)
     improved = rep["cost_after"] < rep["cost_before"]
     rep.update(improved=bool(improved), replans=n_replans, rollouts=n_rollouts, stopped=stopped,
-               residual_max={"arm_rad": round(float(np.abs(U[:, [i for i in range(sim.dim) if i % 7 != 6]]).max()) if U.size else 0.0, 4),
-                             "grip_rad": round(float(np.abs(U[:, [i for i in range(sim.dim) if i % 7 == 6]]).max()) if U.size else 0.0, 4)})
+               residual_max={"arm_rad": round(float(np.abs(U[:, ~sim.grip_mask]).max()) if U.size else 0.0, 4),
+                             "grip_rad": round(float(np.abs(U[:, sim.grip_mask]).max()) if U.size else 0.0, 4)})
     path = bt.export(out / "reference.npz", Qopt if improved else base, source=f"{NAME} from {bt.ref['source']}" + ("" if improved else " (unrefined: no improvement)"))
     plan = TR.write_plan(out / "plan.json", path, bt.model, sem, recon, scene_recon_json=recon_p, method=NAME)
     rep.update(ok=True, reference=path, plan=str(out / "plan.json"), n_entries=len(plan["subgoals"]), coverage=TR.coverage(path, bt.model, sem),

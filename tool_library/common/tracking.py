@@ -413,19 +413,30 @@ class RuntimeSim:
         self.data = mujoco.MjData(self.model)
         self.weights = {"pos": 10.0, "rot": 0.5, "joint": 2.0, "pen": 100.0, "force": 0.05, **(spec.get("weights") or {})}
 
-    # the residual: per side six arm joint offsets (rad) and one grip offset (rad along every flexion joint)
+    # the residual: per side one offset per arm joint (rad) and one grip offset (rad along every flexion joint)
     @property
     def dim(self):
-        return 7 * len(self.sides)
+        return sum(len(self.arm_cols[s]) + 1 for s in self.sides)
+
+    def per_side(self, arm, grip):
+        """A [dim] vector with `arm` at every arm joint slot and `grip` at every grip slot."""
+        return np.concatenate([np.r_[np.full(len(self.arm_cols[s]), float(arm)), float(grip)] for s in self.sides])
+
+    @property
+    def grip_mask(self):
+        """[dim] bool, True at the grip slots."""
+        return self.per_side(0.0, 1.0) > 0.5
 
     def apply(self, commands, residual):
         """commands [n, nq] runtime rows, residual [n, dim]: the commands with the residual added (fingers clipped)."""
         out = np.array(commands, float)
         residual = np.asarray(residual, float).reshape(len(out), self.dim)
-        for i, s in enumerate(self.sides):
-            r = residual[:, 7 * i:7 * i + 7]
-            out[:, self.arm_cols[s]] += r[:, :6]
-            out[:, self.flex_cols[s]] = np.clip(out[:, self.flex_cols[s]] + r[:, 6:7], self.flex_lo[s], self.flex_hi[s])
+        i = 0
+        for s in self.sides:
+            n = len(self.arm_cols[s])
+            out[:, self.arm_cols[s]] += residual[:, i:i + n]
+            out[:, self.flex_cols[s]] = np.clip(out[:, self.flex_cols[s]] + residual[:, i + n:i + n + 1], self.flex_lo[s], self.flex_hi[s])
+            i += n + 1
         return out
 
     def rollout(self, t0, t1, commands, state=None, mechanism=None):

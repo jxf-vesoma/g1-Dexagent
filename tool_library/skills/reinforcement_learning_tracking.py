@@ -82,7 +82,7 @@ SLIPPING = (0.02, 20.0)             # where the unrefined rollout first loses a 
 
 
 def _scales(sim, arm, grip):
-    return np.tile(np.r_[np.full(6, arm), grip], len(sim.sides))
+    return sim.per_side(arm, grip)
 
 
 def _observe(sim, t, qpos, qvel, prev):
