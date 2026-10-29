@@ -24,3 +24,19 @@ scene_recon.json       the manifest: per object the skill, parameters, pose, mas
 trace.jsonl            every model turn, tool call and verifier verdict
 new_tools.json         skills or verifiers the agent added to the library during the run, if any
 ```
+
+## View the scene
+
+Open `scene.xml` in the MuJoCo viewer at the `home` keyframe (the robot at rest, the objects as frame 0 shows them):
+
+```bash
+python -c "
+import sys, mujoco, mujoco.viewer
+m = mujoco.MjModel.from_xml_path(sys.argv[1]); d = mujoco.MjData(m)
+mujoco.mj_resetDataKeyframe(m, d, 0); mujoco.viewer.launch(m, d)" runs/<name>/stage2/scene.xml
+```
+
+Space pauses or runs the physics (the objects should stay put: they rest where the video shows them). To look
+through the video camera, pick `video_cam` under Rendering > Camera in the left panel; `frame0_compare.png` puts the
+same view beside the video frame. Simulation > Key > Load key returns to `home`. `python -m mujoco.viewer
+--mjcf=runs/<name>/stage2/scene.xml` also opens it, but at the joints' zero values instead of `home`.

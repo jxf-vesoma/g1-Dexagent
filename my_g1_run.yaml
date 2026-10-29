@@ -16,7 +16,7 @@ agent:                                 # the language model that runs the agent 
   tool_discovery: search              # search exposes requested schemas; all sends every tool in the stage categories
 
 run:
-  name: g1_cup_on_coaster                        # names the run; everything the stages write goes under output_dir/<name>/
+  name: g1_handover_cup_on_coaster                   # names the run; everything the stages write goes under output_dir/<name>/
   output_dir: runs
 
 examples:                              # verified examples (asset reuse)
@@ -28,27 +28,26 @@ examples:                              # verified examples (asset reuse)
   save_assets: false                   # true: a run whose stages all pass is saved to examples/asset_reuse/<run name> for later reuse
 
 inputs:
-  video: /home/vesoma/DexAgent/demo_videos/cup_on_coaster/cup_on_coaster.mp4       # the human demonstration, filmed by a camera that does not move
-  task: "Pick up the cup and place it on the plate"  # optional one-sentence description of the task; Stage 1 infers it when empty
+  video: /home/vesoma/DexAgent/demo_videos/cup_on_coaster/handover_cup_on_coaster.mp4  # the human demonstration from the G1's head camera
+                                       # (D435i, 640x480, 30 fps); the cup starts at (0.115, 0.352) and the coaster at (-0.105, 0.367)
+  task: "Pick up the cup with the right hand, hand it over to the left hand, and place it on the coaster"  # optional one-sentence description of the task; Stage 1 infers it when empty
   setup: setup_g1_dex1                 # folder with setup.yaml + scene.xml: the table, the robot stations, the cameras (default: our bench)
   library: tool_library                # the tool library the agent uses and extends
   egodex_hdf5: null                    # optional: an EgoDex episode .hdf5; its .mp4 beside it is the video when `video` is not a file
 
 camera:                                # the camera that filmed `inputs.video`
-  source: given                        # setup    = the `ego` camera of the setup folder, as calibrated there
+  source: setup                        # setup    = the `ego` camera of the setup folder, as calibrated there
                                        # given    = the intrinsics/extrinsics below
                                        # estimate = Stage 2 estimates the pose from the table plane in the video (needs intrinsics or fovy)
-  # given: fitted to the frame-0 SAM 3 masks of the measured cup (6 cm x 10 cm) and coaster (8 cm): 0.51 m above the
-  # table, 71 deg below horizontal, fovy 35 deg (mask IoU 0.91 / 0.94); the foot puts the cup at (0.13, 0.20) and the
-  # coaster at (-0.04, 0.20), near the middle in front of the robot, as far left as the right arm places without its
-  # upper arm meeting the torso, and the cup clear of the right gripper's home pose
+  # setup: the video is from the head camera, which setup_g1_dex1's `ego` is (fx = fy = 612.48 px at 640x480, its pose
+  # fitted to a real frame of the 10 cm coaster, the 6 x 10 cm cup and the table edge)
   width: 640                           # pixels; null = read from the video
   height: 480
-  fovy_deg: 35.03                      # vertical field of view, or give fx/fy/cx/cy instead
-  intrinsics: {fx: 760.5, fy: 760.5, cx: 320.0, cy: 240.0}
+  fovy_deg: null                       # vertical field of view, or give fx/fy/cx/cy instead (source: given / estimate)
+  intrinsics: null
   extrinsics:                          # camera pose in the setup's frame (origin between the mounts on the tabletop, x right, y into the work, z up)
-    pos: [0.0325, 0.0473, 0.5103]      # [x, y, z] metres
-    quat_wxyz: [0.986242, 0.165306, 0.0, 0.0]   # MuJoCo convention: the camera looks along its -z axis, image up is +y
+    pos: null                          # [x, y, z] metres
+    quat_wxyz: null                    # MuJoCo convention: the camera looks along its -z axis, image up is +y
     # or a 4x4 camera-to-world matrix in a text/npy file:
     matrix_file: null
 
@@ -65,7 +64,12 @@ stage3:                                # robot trajectory generation; see stage3
   max_rounds: 100                      # the base round budget ...
   rounds_per_subgoal: 0                # ... plus this many rounds per Stage 1 subgoal (e.g. 10 gives a 19-step build room a 3-step pick does not need)
   max_rounds_cap: 300                  # the scaled budget never exceeds this
-  notes: "The robot has Dex1-1 parallel-jaw grippers, not dexterous hands: use generate_parallel_jaw_grasps for grasps." # optional hints for the agent (e.g. which hand the robot should use)
+  notes: >-                            # optional hints for the agent (e.g. which hand the robot should use)
+    The robot has Dex1-1 parallel-jaw grippers, not dexterous hands: use generate_parallel_jaw_grasps for grasps.
+    Execute plan_v23_nolift.json and package that episode. It is plan_v22_right_outward8.json with the left regrasp
+    lift_m set to 0: the handover only closes and holds, it must not lift the cup (do not set lift_m back above 0).
+    The carries have no via_rise and the place has carry_rise_m 0; do not add either rise back. Keep the right grasp
+    right_pose_outward8.json and the left grasp left_handover_camup_outward5.json (wrist camera on top). Then package and finish.
   max_wall_minutes: 240                # wall-clock budget besides the rounds; past it the agent has 3 rounds to finish or report
   stall_note_executions: 10            # every physical execution is scored against the Stage 1 goals; after this many without
   stall_stop_executions: 25            # improving the best, the agent is told to change strategy; after this many the search ends
