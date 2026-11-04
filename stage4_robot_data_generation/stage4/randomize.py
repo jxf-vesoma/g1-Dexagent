@@ -406,7 +406,33 @@ class Episode:
         for side, s in self.sides.items():
             n = len((s["follower"]["chain"] if s["follower"] else s["ee"]).qadr)
             robot[side] = [float(v) for v in rng.uniform(-r, r, n)]
-        return {"objects": objs, "robot": robot}
+        out = {"objects": objs, "robot": robot}
+        offsets = self.cfg["randomize"].get("hand_offsets") or []
+        if offsets:
+            # drawn after everything else, so a config without hand offsets draws exactly the layouts it always did
+            out["hand_offsets"] = [[float(rng.uniform(*o.get(k, [0.0, 0.0]))) for k in ("dx", "dy", "dz")]
+                                   if rng.uniform() < float(o.get("p", 1.0)) else [0.0, 0.0, 0.0] for o in offsets]
+        return out
+
+    def _hand_offsets(self, layout):
+        """{side: (T, 3)} world translations added to a hand's anchored pose: each randomize.hand_offsets entry
+        moves its side's hand by its drawn (dx, dy, dz) over the frames of its phases, rising from and returning to
+        zero (`bump`: sin^2 over the run; `plateau`: smoothstep ramps over the first and last `ramp` of the run)."""
+        out = {}
+        for o, d in zip(self.cfg["randomize"].get("hand_offsets") or [], layout.get("hand_offsets") or []):
+            if not np.any(d):
+                continue
+            idx = [t for t, lab in enumerate(self.labels) if any(fnmatch.fnmatchcase(lab, p) for p in o["phases"])]
+            assert idx, f"hand offset phases {o['phases']} match no frame of the trajectory"
+            u = np.linspace(0.0, 1.0, len(idx))
+            if o.get("shape", "bump") == "bump":
+                w = np.sin(np.pi * u) ** 2
+            else:
+                ramp = float(o.get("ramp", 0.2))
+                w = np.minimum(smoothstep(u / ramp), smoothstep((1.0 - u) / ramp))
+            off = out.setdefault(o["side"], np.zeros((self.T, 3)))
+            off[idx] += w[:, None] * np.asarray(d, float)
+        return out
 
     def _displacements(self, layout):
         """{object: (R, t)} where every object starts. Objects attached_to another are resolved bottom-up (a cap on
@@ -500,6 +526,7 @@ class Episode:
                 for t in range(r["t_ride"], T if r["t_release"] is None else max(r["t_ride"], r["t_release"])):
                     who[t] = r["side"]
             riding[name] = who
+        hand_off = self._hand_offsets(layout)
 
         def side_pass(sides, held_now=None, prev=None):
             out = dict(prev or {})
@@ -522,6 +549,8 @@ class Episode:
                     else:
                         pb, Rb = apply(anchor(b[t], t), P[t], R[t])
                         p2, R2 = (1 - w[t]) * pa + w[t] * pb, K.slerp(Ra, Rb, w[t])
+                    if side in hand_off:
+                        p2 = p2 + hand_off[side][t]
                     dR = R2 @ R[t].T
                     Dn.append((dR, p2 - dR @ P[t]))
                 out[side] = Dn
@@ -1208,7 +1237,7 @@ class Randomizer:
         jit = layout.get("robot") or {}
         if (not res["ok"] and res["failed"] == ["physics"] and self.phys is not None
                 and any(np.any(np.asarray(v, float) != 0.0) for v in jit.values())):
-            still = {"objects": layout["objects"], "robot": {s: [0.0] * len(v) for s, v in jit.items()}}
+            still = {**layout, "robot": {s: [0.0] * len(v) for s, v in jit.items()}}
             res2, pl2 = self.warp(still)
             row["start_offset_dropped"] = {"ok": res2["ok"], "failed": list(res2["failed"]), "method": res2["method"]}
             if res2.get("physics_seconds") is not None:
