@@ -6,8 +6,13 @@ One sample is one episode. Per frame:
     observation.state          measured robot joint positions (rad; jaws in m), qpos of the recorded episode
     action                     absolute joint position targets: the servo reference of the next frame (`reference` in
                                trajectory.npz is the joint path the arm and jaw servos tracked, jaws commanded past the
-                               object's surface so they squeeze); the last frame repeats its own target
+                               object's surface so they squeeze); the last frame repeats its own target. With
+                               lerobot.grip_cap, a gripper's target is at most `margin` past its measured position
+                               of that frame in the closing direction
     observation.images.<view>  the composited video of every rendered view (ego first), copied as encoded
+
+The sim jaw servo holds an object by a force-limited command to fully closed. A position-controlled real gripper given
+that target crushes the object, so grip_cap labels a grip as the squeeze it can execute: contact plus a margin.
 
 A joint that an equality constraint drives from another (the second jaw of a one-motor gripper) is left out of both
 vectors unless lerobot.merge_coupled is false. The language instruction is lerobot.task, or Stage 1's task prompt.
@@ -39,7 +44,21 @@ DEFAULTS = {
     "include_original": True,    # the un-randomized trajectory as episode 0
     "merge_coupled": True,       # leave out joints an equality constraint drives from another joint
     "image_stats_frames": 100,   # frames per video sampled for the image statistics
+    "grip_cap": None,            # {"joints": [feature-name globs], "margin": m or rad, "closing": +1 or -1}
 }
+
+
+def cap_grip(act, q, names, cap):
+    """Gripper targets no further than cap["margin"] past the measured position, in the closing direction."""
+    import fnmatch
+    out = act.copy()
+    s = float(cap.get("closing", 1.0))
+    q_next = np.concatenate([q[1:], q[-1:]])
+    for k, n in enumerate(names):
+        if any(fnmatch.fnmatchcase(n, p) for p in cap["joints"]):
+            past = np.minimum(s * (act[:, k] - q_next[:, k]), float(cap["margin"]))
+            out[:, k] = q_next[:, k] + s * past
+    return out
 
 
 def settings(cfg):
@@ -178,6 +197,8 @@ def run(cfg, log=print):
             f"{ {v: vi['n'] for v, vi in info.items()} } frames")
         q, ref = q[:T], ref[:T]
         act = np.concatenate([ref[1:], ref[-1:]])
+        if st["grip_cap"]:
+            act = cap_grip(act, q, names, st["grip_cap"])
         t = np.arange(T) / fps
         rows = {"observation.state": q.astype(np.float32).tolist(), "action": act.astype(np.float32).tolist(),
                 "timestamp": t.astype(np.float32).tolist(), "frame_index": list(range(T)),
