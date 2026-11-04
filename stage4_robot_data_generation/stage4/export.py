@@ -14,6 +14,7 @@ import hashlib
 import json
 import re
 import shutil
+import zlib
 from pathlib import Path
 
 import cv2
@@ -281,10 +282,14 @@ def project(cam, pts, W, H):
         return cx + fx * q[..., 0] / z, cy - fy * q[..., 1] / z, z
 
 
-def reproject_plate(plate, ego, cam, table, room, W, H):
+def reproject_plate(plate, ego, cam, table, room, W, H, unseen=None, spread_px=0.0):
     """The ego plate as seen from another camera: every pixel that looks at the
     table plane is traced to it and sampled back through the ego lens. Pixels
-    off the table, or outside what the ego camera saw, take the room tone."""
+    off the table, or outside what the ego camera saw, take the room tone (a color,
+    or an H x W x 3 image); with `unseen`, table pixels the ego camera did not see
+    take that color instead, and with `spread_px` > 0 the seen table is spread over
+    them, fading to `unseen` over about that many pixels, so no edge marks where
+    the plate ends."""
     on, pts = table_mask(cam, table, W, H)
     EH, EW = plate.shape[:2]
     eu, ev, z = project(ego, pts, EW, EH)
@@ -292,8 +297,63 @@ def reproject_plate(plate, ego, cam, table, room, W, H):
     ok = on & (z > 1e-6) & (eu >= 0) & (eu <= EW - 1) & (ev >= 0) & (ev <= EH - 1)
     eu[~ok], ev[~ok] = 0, 0
     img = cv2.remap(plate, eu, ev, cv2.INTER_LINEAR)
-    img[~ok] = room
+    img[~ok] = room[~ok] if np.ndim(room) == 3 else room
+    if unseen is None:
+        return img
+    if spread_px <= 0.0:
+        img[on & ~ok] = unseen
+        return img
+    # a blur normalised by the seen mask, at 1/8 resolution (a wide blur at full size is slow)
+    okf = ok.astype(np.float32)
+    w, h, s = max(1, W // 8), max(1, H // 8), spread_px / 8.0
+    num = cv2.GaussianBlur(cv2.resize(img.astype(np.float32) * okf[..., None], (w, h), interpolation=cv2.INTER_AREA), (0, 0), s)
+    den = cv2.GaussianBlur(cv2.resize(okf, (w, h), interpolation=cv2.INTER_AREA), (0, 0), s)[..., None]
+    fill = (num + 0.05 * np.asarray(unseen, np.float32)) / (den + 0.05)
+    fill = cv2.resize(fill, (W, H), interpolation=cv2.INTER_LINEAR)
+    a = cv2.GaussianBlur(okf, (0, 0), 2.0)[..., None] * okf[..., None]      # a soft seam on the seen side only
+    blend = a * img.astype(np.float32) + (1.0 - a) * fill
+    img[on] = np.clip(blend[on], 0, 255).astype(np.uint8)
     return img
+
+
+def room_image(room, jit, seed, name, W, H):
+    """One episode's off-table background: a drawn grey level and tint with a smooth random pattern on it (the
+    real wrist camera sees a varied room there, not one flat tone), from render.room_jitter, seeded by the sample."""
+    rng = np.random.default_rng([int(seed), zlib.crc32(name.encode()), 2])
+    lo, hi = jit.get("level", [float(np.mean(room))] * 2)
+    base = rng.uniform(lo, hi) + rng.uniform(-1.0, 1.0, 3) * float(jit.get("tint", 0.0))
+    noise = cv2.GaussianBlur(rng.standard_normal((H // 8, W // 8)).astype(np.float32), (0, 0), 3.0)
+    noise = cv2.resize(noise / max(1e-6, float(noise.std())), (W, H), interpolation=cv2.INTER_CUBIC)
+    img = base[None, None, :] + float(jit.get("noise", 0.0)) * noise[..., None]
+    return np.clip(img, 0, 255).astype(np.uint8)
+
+
+def jitter_materials(geoms, rules, seed, name):
+    """One episode's object colors: the geoms (by name) of each render.material_jitter rule share one color drawn
+    in HSV (sRGB), unless the rule keeps the configured one with probability keep_p; seeded by the sample."""
+    import colorsys
+    rng = np.random.default_rng([int(seed), zlib.crc32(name.encode()), 1])
+    out = list(geoms)
+    for r in rules:
+        h, s, v = (rng.uniform(*r.get(k, d)) for k, d in (("hue", [0.0, 1.0]), ("sat", [0.6, 0.9]), ("val", [0.3, 0.7])))
+        if rng.uniform() < float(r.get("keep_p", 0.0)):
+            continue
+        base = [float(c) for c in linear(np.array(colorsys.hsv_to_rgb(h, s, v)) * 255.0)]
+        out = [dict(e, material=dict(e["material"], base=base)) if re.search(r["match"], e["name"]) else e for e in out]
+    return out
+
+
+def jitter_view(cam, jit, seed, name, view, W, H):
+    """One episode's mount of a body-attached camera: the configured pose turned by up to rot_deg about each of its
+    axes, moved by up to pos_mm along each, and its field of view changed by up to fovy_deg; seeded by the sample."""
+    rng = np.random.default_rng([int(seed), zlib.crc32(name.encode()), zlib.crc32(view.encode())])
+    R0 = quat_R(cam["quat_wxyz"])
+    R = R0 @ cv2.Rodrigues(np.radians(rng.uniform(-1.0, 1.0, 3) * float(jit.get("rot_deg", 0.0))))[0]
+    pos = np.asarray(cam["pos"], float) + R0 @ (rng.uniform(-1.0, 1.0, 3) * float(jit.get("pos_mm", 0.0)) * 1e-3)
+    raw = {k: v for k, v in cam.items() if k not in ("fx", "fy", "cx", "cy", "image_size")}
+    raw.update(pos=pos.tolist(), quat_wxyz=K.mat2quat(R).tolist(),
+               fovy=float(cam["fovy"]) + float(rng.uniform(-1.0, 1.0) * float(jit.get("fovy_deg", 0.0))))
+    return resolved_camera(raw, W, H)
 
 
 def room_tone(plate, ego, table):
@@ -301,6 +361,23 @@ def room_tone(plate, ego, table):
     on, _ = table_mask(ego, table, plate.shape[1], plate.shape[0])
     px = plate[~on] if (~on).sum() > 100 else plate.reshape(-1, 3)
     return np.median(px, axis=0).astype(np.uint8)
+
+
+def jitter_lighting(light, jit, seed, name):
+    """One episode's lighting: log-uniform scaled energies, a turned sun and a warmer or cooler ambient,
+    drawn from render.lighting_jitter and seeded by the sample name so a re-export draws the same."""
+    rng = np.random.default_rng([int(seed), zlib.crc32(name.encode())])
+    out = dict(light)
+    lo, hi = jit.get("energy_scale", [1.0, 1.0])
+    for k in ("sun_energy", "fill_energy", "world_strength"):
+        out[k] = float(light[k] * np.exp(rng.uniform(np.log(lo), np.log(hi))))
+    e = [float(v) for v in light["sun_euler"]]
+    e[0] += float(np.radians(rng.uniform(-1.0, 1.0) * jit.get("sun_tilt_deg", 0.0)))
+    e[2] += float(np.radians(rng.uniform(-1.0, 1.0) * jit.get("sun_turn_deg", 0.0)))
+    out["sun_euler"] = e
+    w = float(rng.uniform(-1.0, 1.0) * jit.get("warmth", 0.0))
+    out["world_color"] = [float(c * f) for c, f in zip(light["world_color"], (1.0 + w, 1.0, 1.0 - w))]
+    return out
 
 
 def linear(srgb):
@@ -394,6 +471,10 @@ def run(cfg, log=print):
         px = plate[on] if on.sum() > 100 else plate.reshape(-1, 3)
         light["world_color"] = [float(v) for v in linear(np.median(px, axis=0)[::-1])]
     room = room_tone(plate, ego, table)
+    unseen = None
+    if table.get("unseen") == "table":    # an ego camera that does not see the table near the robot (a head camera)
+        on, _ = table_mask(ego, table, W, H)
+        unseen = np.median(plate[on] if on.sum() > 100 else plate.reshape(-1, 3), axis=0).astype(np.uint8)
     # the simulator's own near plane, so a render shows what the sim camera shows
     near = float(base.vis.map.znear * base.stat.extent)
     lens = ("fx", "fy", "cx", "cy", "fovy")
@@ -414,7 +495,9 @@ def run(cfg, log=print):
         z = np.load(traj_f)
         Q, fps = z["qpos"][::stride], float(z["fps"]) / stride
         n = len(Q)
-        parents = {v: K.body_id(model, c["parent_body"]) for v, c in view_cams.items()}
+        sample_cams = {v: (jitter_view(c, cams["views"][v]["pose_jitter"], cfg["seed"], sdir.name, v, W, H)
+                           if cams["views"][v].get("pose_jitter") else c) for v, c in view_cams.items()}
+        parents = {v: K.body_id(model, c["parent_body"]) for v, c in sample_cams.items()}
         T = np.zeros((n, len(gids), 4, 4))
         T[:, :, 3, 3] = 1.0
         tracks = {v: [] for v in parents}
@@ -424,7 +507,7 @@ def run(cfg, log=print):
             T[t, :, :3, :3] = data.geom_xmat[gids].reshape(-1, 3, 3)
             T[t, :, :3, 3] = data.geom_xpos[gids]
             for v, b in parents.items():
-                c = view_cams[v]
+                c = sample_cams[v]
                 R = data.xmat[b].reshape(3, 3)
                 tracks[v].append({
                     "pos": (data.xpos[b] + R @ np.asarray(c["pos"], float)).tolist(),
@@ -433,8 +516,13 @@ def run(cfg, log=print):
         out = root / sdir.name
         out.mkdir(parents=True, exist_ok=True)
         np.savez_compressed(out / "transforms.npz", T=T)
-        common = {"geoms": geoms, "table": table, "width": W, "height": H, "fps": fps,
-                  "n_frames": n, "samples": int(rc["samples"]), "lighting": light,
+        jit = rc.get("lighting_jitter")
+        light_s = jitter_lighting(light, jit, cfg["seed"], sdir.name) if jit else light
+        mats = rc.get("material_jitter")
+        geoms_s = jitter_materials(geoms, mats, cfg["seed"], sdir.name) if mats else geoms
+        room_s = room_image(room, rc["room_jitter"], cfg["seed"], sdir.name, W, H) if rc.get("room_jitter") else room
+        common = {"geoms": geoms_s, "table": table, "width": W, "height": H, "fps": fps,
+                  "n_frames": n, "samples": int(rc["samples"]), "lighting": light_s,
                   "fill_pos": ego["pos"], "transforms": str(out / "transforms.npz")}
         for view in views:
             vdir = out / view
@@ -447,7 +535,7 @@ def run(cfg, log=print):
                 meta["near_fade"] = ego.get("near_fade", [0.05, 0.15])
                 meta["plate"] = str(plate_f)
             else:
-                c = view_cams[view]
+                c = sample_cams[view]
                 meta["camera"] = {**tracks[view][0], **{k: c[k] for k in lens},
                                   "clip_start": c.get("clip_start", near)}
                 meta["camera_track"] = tracks[view]
@@ -458,7 +546,8 @@ def run(cfg, log=print):
                 for t in range(n):
                     cam_t = {**c, **tracks[view][t]}
                     cv2.imwrite(str(pdir / f"frame{t:05d}.png"),
-                                reproject_plate(plate, ego, cam_t, table, room, W, H))
+                                reproject_plate(plate, ego, cam_t, table, room_s, W, H, unseen,
+                                                float(table.get("unseen_spread_px", 0.0))))
                 meta["plates_dir"] = str(pdir)
             blob = json.dumps(meta, indent=1)
             key = render_key(meta, T)
