@@ -161,7 +161,7 @@ def resolve_material(rules, key, mesh, name, rgba, rough):
             for pat, params in PRESETS[r["preset"]]:
                 if re.search(pat, mesh or name, re.I):
                     return dict(params)
-        return {k: r[k] for k in ("base", "metallic", "rough", "spec") if k in r}
+        return {k: r[k] for k in ("base", "metallic", "rough", "spec", "transmission") if k in r}
     return {"base": rgba[:3], "metallic": 0.0, "rough": rough}
 
 
@@ -241,8 +241,11 @@ def export_geoms(model, cfg, shared, report=None):
             e["texture_sha1"] = hashlib.sha1(Path(e["texture"]).read_bytes()).hexdigest()
         e["material"] = resolve_material(rc["materials"], key, mesh, name, rgba,
                                          rc["object_roughness"])
-        if rgba[3] < 1.0:
-            e["transmission"] = round(1.0 - rgba[3], 3)       # MuJoCo alpha = see-through
+        transmission = e["material"].pop("transmission", None)   # a rule's own value overrides the alpha
+        if transmission is None and rgba[3] < 1.0:
+            transmission = round(1.0 - rgba[3], 3)       # MuJoCo alpha = see-through
+        if transmission:
+            e["transmission"] = float(transmission)
         entries.append(e)
     assert entries, "no visible geoms to render: check render.visual_groups / exclude_geoms"
     return entries
